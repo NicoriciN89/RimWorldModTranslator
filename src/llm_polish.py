@@ -14,9 +14,14 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+
+from .log_setup import get_logger
+
+log = get_logger("llm_polish")
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_MODEL = "qwen2.5:7b"
@@ -131,6 +136,8 @@ class LlmPolisher:
             "stream": False,
             "options": {"temperature": 0.2},
         }
+        log.debug("LLM-запрос: %s.%s (%.60s)", context.mod_name, context.field_key, original)
+        started = time.monotonic()
         try:
             req = urllib.request.Request(
                 self.base_url,
@@ -141,8 +148,15 @@ class LlmPolisher:
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             raw = data.get("response", "").strip()
-            return self._extract_answer(raw) or draft
-        except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+            elapsed = time.monotonic() - started
+            answer = self._extract_answer(raw)
+            log.debug("LLM-ответ за %.1fs: %s.%s -> %.60s",
+                      elapsed, context.mod_name, context.field_key, answer or "(пусто, откат на Argos)")
+            return answer or draft
+        except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
+            elapsed = time.monotonic() - started
+            log.warning("LLM-запрос упал за %.1fs (%s.%s): %s — откат на черновик Argos",
+                        elapsed, context.mod_name, context.field_key, e)
             return draft
 
     @staticmethod

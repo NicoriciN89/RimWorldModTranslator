@@ -13,8 +13,11 @@ from typing import Callable
 from . import generator, incremental, scanner
 from .generator import rimworld_lang_dir_name
 from .llm_polish import LANG_HUMAN_NAMES, LlmContext, LlmPolisher
+from .log_setup import get_logger
 from .safe_print import safe_print
 from .translator import get_engine
+
+log = get_logger("main")
 
 if sys.stdout is not None and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
@@ -74,7 +77,7 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
         on_progress(0, total_strings, f"[2/4] Всего строк к переводу: {total_strings}")
 
     engine_label = {
-        (True, True): "Argos + LLM",
+        (True, True): "Argos + LLM, двумя проходами",
         (True, False): "только Argos",
         (False, True): "только LLM",
     }[(use_argos, use_llm)]
@@ -91,15 +94,34 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
             on_progress(0, total_strings, f"      LLM-доработка запрошена, но Ollama/{llm_model} "
                                            f"недоступна — использую только доступный движок.")
 
+    entries_to_translate = [
+        entry
+        for task in list(scan.keyed) + list(scan.def_injected)
+        for entry in task.data.keyed_items()
+        if entry.key not in reused_keys
+    ]
+
     done = len(reused_keys)
     on_progress(done, total_strings, "")
-    for task in list(scan.keyed) + list(scan.def_injected):
-        for entry in task.data.keyed_items():
-            if entry.key in reused_keys:
-                continue
-            draft = engine.translate(entry.text) if engine is not None else entry.text
-            entry.text = polisher.polish(entry.text, draft, LlmContext(mod_name, entry.key)) \
-                if use_llm else draft
+
+    if use_argos:
+        pass_label = "[3a/4] Argos" if use_llm else "[3/4] Argos"
+        on_progress(done, total_strings, f"{pass_label}: перевожу черновик для {len(entries_to_translate)} строк...")
+        for entry in entries_to_translate:
+            log.debug("[Argos %d/%d] перевожу %s", done + 1, total_strings, entry.key)
+            entry.text = engine.translate(entry.text)
+            done += 1
+            on_progress(done, total_strings, "")
+
+    if use_llm:
+        done = len(reused_keys)
+        pass_label = "[3b/4] LLM" if use_argos else "[3/4] LLM"
+        on_progress(done, total_strings, f"{pass_label}: дорабатываю {len(entries_to_translate)} строк "
+                                          f"через {llm_model}...")
+        for entry in entries_to_translate:
+            log.debug("[LLM %d/%d] дорабатываю %s", done + 1, total_strings, entry.key)
+            original_text = english_by_key[entry.key]
+            entry.text = polisher.polish(original_text, entry.text, LlmContext(mod_name, entry.key))
             done += 1
             on_progress(done, total_strings, "")
 
@@ -137,12 +159,21 @@ def main() -> None:
                               "остальное взять из уже существующего перевода в --out")
     args = parser.parse_args()
 
+    from .log_setup import setup_logging
+    log_path = setup_logging()
+    log.info("=== CLI-запуск: %s ===", vars(args))
+    safe_print(f"Лог: {log_path}", file=sys.stderr)
+
     try:
         translate_mod(args.src.resolve(), args.out.resolve(), args.source_lang, args.lang,
                        use_llm=args.llm, llm_model=args.llm_model,
                        use_argos=not args.no_argos, update=args.update)
     except ValueError as e:
+        log.error("Перевод прерван: %s", e)
         raise SystemExit(str(e))
+    except Exception:
+        log.exception("Необработанное исключение в CLI")
+        raise
     print()
 
 

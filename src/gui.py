@@ -2,6 +2,7 @@
 папку мода, выбрать язык и нажать кнопку — остальное делает main.translate_mod."""
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import traceback
@@ -9,8 +10,11 @@ from pathlib import Path
 from tkinter import BOTH, BooleanVar, DISABLED, END, HORIZONTAL, LEFT, NORMAL, RIGHT, X, Tk, filedialog, messagebox
 from tkinter import ttk
 
-from . import generator, main as main_module
+from . import __version__, generator, main as main_module
 from .llm_polish import DEFAULT_MODEL, list_installed_models
+from .log_setup import get_logger, setup_logging
+
+log = get_logger("gui")
 
 ENGINE_ARGOS_ONLY = "Только Argos (быстро)"
 ENGINE_LLM_ONLY = "Только LLM (медленно, качественнее)"
@@ -38,7 +42,7 @@ LANGUAGES = [
 class TranslatorApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
-        self.root.title("RimWorld Mod Translator")
+        self.root.title(f"RimWorld Mod Translator v{__version__}")
         self.root.geometry("560x360")
         self.root.minsize(480, 320)
 
@@ -132,6 +136,11 @@ class TranslatorApp:
         self.status_label = ttk.Label(frame, text="Готов к работе.", wraplength=520, justify=LEFT)
         self.status_label.pack(fill=X, pady=4)
 
+        log_path = Path(logging.getLogger("rmt").handlers[0].baseFilename) \
+            if logging.getLogger("rmt").handlers else None
+        log_hint = f"Подробный лог: {log_path}" if log_path else ""
+        ttk.Label(frame, text=log_hint, foreground="#888", wraplength=520, justify=LEFT).pack(fill=X, pady=(0, 4))
+
     def _pick_mod_folder(self) -> None:
         path = filedialog.askdirectory(title="Выберите папку мода (там, где About/About.xml)")
         if not path:
@@ -205,15 +214,23 @@ class TranslatorApp:
     def _run_translation(self, mod_path: Path, out_path: Path, lang_code: str,
                           use_argos: bool, use_llm: bool, llm_model: str, update: bool) -> None:
         def on_progress(done: int, total: int, message: str) -> None:
+            if message:
+                log.info(message)
+            else:
+                log.debug("progress %d/%d", done, total)
             self._queue.put(("progress", done, total, message))
 
+        log.info("=== Запуск перевода: mod=%s out=%s lang=%s argos=%s llm=%s(%s) update=%s ===",
+                  mod_path, out_path, lang_code, use_argos, use_llm, llm_model, update)
         try:
             result = main_module.translate_mod(
                 mod_path, out_path, "en", lang_code, on_progress=on_progress,
                 use_llm=use_llm, llm_model=llm_model, use_argos=use_argos, update=update,
             )
+            log.info("Готово: %s", result)
             self._queue.put(("done", str(result)))
         except Exception as e:
+            log.error("Перевод упал с ошибкой: %s\n%s", e, traceback.format_exc())
             self._queue.put(("error", f"{e}\n\n{traceback.format_exc()}"))
 
     def _poll_queue(self) -> None:
@@ -252,6 +269,8 @@ class TranslatorApp:
 
 
 def main() -> None:
+    log_path = setup_logging()
+    log.info("=== RimWorld Mod Translator v%s запущен, лог: %s ===", __version__, log_path)
     root = Tk()
     TranslatorApp(root)
     root.mainloop()

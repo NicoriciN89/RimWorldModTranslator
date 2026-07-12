@@ -6,3 +6,4 @@ dist/
 *.spec
 output/
 .translation_cache.json
+translator.log
