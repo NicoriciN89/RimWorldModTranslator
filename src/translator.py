@@ -21,6 +21,12 @@ from .safe_print import safe_print
 
 _PLACEHOLDER_RE = re.compile(r"\{\w+\}|\\n|\\r")
 
+# Argos иногда даёт перевод не на целевой язык вместо русского для редких/
+# составных слов, которых нет в её словаре (напр. случайные китайские
+# иероглифы вместо перевода). У кириллицы и CJK нет общих символов, так что
+# наличие CJK в результате при target_lang="ru" — надёжный признак порчи.
+_CJK_RE = re.compile(r"[一-鿿぀-ヿ가-힣]")
+
 
 class TranslationEngine:
     """Ленивая инициализация Argos Translate: тяжёлый импорт/загрузка моделей
@@ -78,14 +84,22 @@ class TranslationEngine:
             return part
         lead = part[:len(part) - len(part.lstrip())]
         trail = part[len(part.rstrip()):]
+        with_glossary = use_glossary and self.target_lang == "ru"
 
-        if use_glossary and self.target_lang == "ru":
-            ctx = GlossaryContext()
-            protected = ctx.protect(stripped)
-            translated = self._translate_raw(protected)
-            translated = ctx.restore(translated)
-        else:
-            translated = self._translate_raw(stripped)
+        def run_once() -> str:
+            if with_glossary:
+                ctx = GlossaryContext()
+                return ctx.restore(self._translate_raw(ctx.protect(stripped)))
+            return self._translate_raw(stripped)
+
+        translated = run_once()
+        if self.target_lang == "ru" and _CJK_RE.search(translated):
+            # Похоже на порчу перевода (случайный третий язык вместо
+            # русского) — одна повторная попытка обычно даёт нормальный
+            # результат, так как Argos не детерминирован по батчам.
+            retry = run_once()
+            if not _CJK_RE.search(retry):
+                translated = retry
 
         return lead + translated + trail
 

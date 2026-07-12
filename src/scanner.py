@@ -99,9 +99,15 @@ def _scan_defs_fallback(mod_root: Path) -> list[DefInjectedTask]:
     Сканирует только папки, которые реально грузятся игрой (см.
     _resolve_content_roots), чтобы не дублировать перевод одного и того же
     контента из старых версионных копий мода."""
-    defs_dirs: list[Path] = []
+    # Разные content root могут быть вложены друг в друга (напр. mod_root и
+    # mod_root/1.6), из-за чего одна и та же папка Defs находилась бы дважды
+    # через рекурсивный "**/Defs" от каждого корня — дедуплицируем по
+    # разрешённому абсолютному пути.
+    seen_defs_dirs: dict[Path, Path] = {}
     for content_root in _resolve_content_roots(mod_root):
-        defs_dirs.extend(content_root.glob("**/Defs"))
+        for defs_dir in content_root.glob("**/Defs"):
+            seen_defs_dirs.setdefault(defs_dir.resolve(), defs_dir)
+    defs_dirs = list(seen_defs_dirs.values())
 
     grouped: dict[tuple[str, str], list[xml_io.DefFieldRef]] = {}
     for defs_dir in defs_dirs:
