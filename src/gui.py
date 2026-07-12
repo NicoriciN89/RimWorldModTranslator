@@ -16,6 +16,24 @@ from .log_setup import get_logger, setup_logging
 
 log = get_logger("gui")
 
+# Типичные пути установки RimWorld (Steam) — используются только как отправная
+# точка для диалога "Обзор...", если существуют на этом ПК; если нет ни одной,
+# диалог просто открывается без initialdir, как раньше.
+_COMMON_RIMWORLD_DATA_DIRS = [
+    r"C:\Program Files (x86)\Steam\steamapps\common\RimWorld\Data",
+    r"D:\Steam\steamapps\common\RimWorld\Data",
+    r"E:\games\RimWorld\Data",
+    r"E:\SteamLibrary\steamapps\common\RimWorld\Data",
+]
+
+
+def _default_mods_dir() -> str:
+    for candidate in _COMMON_RIMWORLD_DATA_DIRS:
+        if Path(candidate).is_dir():
+            return candidate
+    return ""
+
+
 ENGINE_ARGOS_ONLY = "Только Argos (быстро)"
 ENGINE_LLM_ONLY = "Только LLM (медленно, качественнее)"
 ENGINE_BOTH = "Argos + LLM-доработка (рекомендовано)"
@@ -142,7 +160,10 @@ class TranslatorApp:
         ttk.Label(frame, text=log_hint, foreground="#888", wraplength=520, justify=LEFT).pack(fill=X, pady=(0, 4))
 
     def _pick_mod_folder(self) -> None:
-        path = filedialog.askdirectory(title="Выберите папку мода (там, где About/About.xml)")
+        path = filedialog.askdirectory(
+            title="Выберите папку мода (там, где About/About.xml)",
+            initialdir=_default_mods_dir(),
+        )
         if not path:
             return
         self.mod_entry.delete(0, END)
