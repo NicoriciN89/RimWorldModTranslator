@@ -101,6 +101,63 @@ GLOSSARY: dict[str, str] = {
     "power pole": "опорный столб",
 }
 
+# Прилагательные из глоссария, которые нужно согласовывать по роду/числу с
+# существительным, стоящим рядом (глоссарий хранит только словарную форму
+# м.р. ед.ч. — "усиленный"). Без этого получались реальные баги вида "труба
+# усиленный", "трубы усиленный" вместо "усиленная труба", "усиленные трубы".
+_ADJECTIVE_FORMS: dict[str, dict[str, str]] = {
+    "усиленный": {
+        "m": "усиленный", "f": "усиленная", "n": "усиленное", "pl": "усиленные",
+    },
+}
+
+# Грубая эвристика рода/числа по окончанию существительного — этого достаточно
+# для типовой игровой лексики (труба/трубы, кабель/кабели, проводка и т.п.),
+# не претендует на полный морфологический разбор русского языка. Известное
+# ограничение: не различает падежи, поэтому "труб усиленный" (родительный
+# падеж мн.ч.) не исправляется — окончание "труб" неотличимо от м.р. ед.ч.
+# без словаря морфологии (напр. pymorphy2). Тоже может спутать соседнее
+# слово, если это не существительное, а глагол ("Сделать усиленный трубы").
+# Такие случаи остаются как есть — это упрощение, а не полное решение.
+_FEMININE_ENDINGS = ("а", "я")
+_PLURAL_ENDINGS = ("ы", "и")
+_NEUTER_ENDINGS = ("о", "е", "ё")
+
+
+def _guess_gender_number(noun: str) -> str:
+    lower = noun.lower()
+    if lower.endswith(_PLURAL_ENDINGS):
+        return "pl"
+    if lower.endswith(_FEMININE_ENDINGS):
+        return "f"
+    if lower.endswith(_NEUTER_ENDINGS):
+        return "n"
+    return "m"
+
+
+_NOUN_RE = r"[А-ЯЁа-яё]+"
+_AGREEMENT_RE = re.compile(
+    rf"\b({'|'.join(re.escape(a) for a in _ADJECTIVE_FORMS)})\b\s+({_NOUN_RE})"
+    rf"|({_NOUN_RE})\s+\b({'|'.join(re.escape(a) for a in _ADJECTIVE_FORMS)})\b"
+)
+
+
+def agree_adjectives(text: str) -> str:
+    """Подгоняет род/число защищённых прилагательных (см. _ADJECTIVE_FORMS)
+    под соседнее существительное — "труба усиленный" -> "усиленная труба"
+    остаётся в исходном порядке слов, меняется только форма прилагательного."""
+    def repl(m: re.Match) -> str:
+        adj_before, noun_after, noun_before, adj_after = m.groups()
+        adj = adj_before or adj_after
+        noun = noun_after or noun_before
+        forms = _ADJECTIVE_FORMS[adj.lower()]
+        agreed = forms[_guess_gender_number(noun)]
+        if adj_before:
+            return f"{agreed} {noun}"
+        return f"{noun} {agreed}"
+
+    return _AGREEMENT_RE.sub(repl, text)
+
 # Плейсхолдер-токен, который (эмпирически проверено) Argos Translate переносит
 # через перевод буквально в подавляющем большинстве случаев, без транслитерации
 # или склонения — латинское "слово" без цифр/подчёркиваний, похожее на имя.
@@ -141,4 +198,6 @@ class GlossaryContext:
             return m.group(0)
 
         restored = pattern.sub(repl, text)
-        return re.sub(r" {2,}", " ", restored).strip()
+        restored = re.sub(r" {2,}", " ", restored).strip()
+        restored = re.sub(r"\s+([.,!?;:])", r"\1", restored)
+        return agree_adjectives(restored)

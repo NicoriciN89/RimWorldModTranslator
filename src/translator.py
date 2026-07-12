@@ -9,6 +9,10 @@
 (напр. {species} -> {物种}). Вместо этого текст режется на сегменты по
 границам плейсхолдеров, переводится только то, что между ними, а сами
 плейсхолдеры склеиваются обратно как литералы после перевода.
+
+Той же защитой покрыт префикс "ключ->" в начале строки — формат
+QuestScriptDef.*.rulesStrings ("distress->Distress Call"), где часть до
+стрелки это идентификатор правила генерации, а не переводимый текст.
 """
 from __future__ import annotations
 
@@ -19,7 +23,7 @@ from functools import lru_cache
 from .glossary import GlossaryContext
 from .safe_print import safe_print
 
-_PLACEHOLDER_RE = re.compile(r"\{\w+\}|\\n|\\r")
+_PLACEHOLDER_RE = re.compile(r"\{\w+\}|\\n|\\r|^[\w.\[\]]+->")
 
 # Argos иногда даёт перевод не на целевой язык вместо русского для редких/
 # составных слов, которых нет в её словаре (напр. случайные китайские

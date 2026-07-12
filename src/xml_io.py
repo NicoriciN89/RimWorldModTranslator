@@ -79,8 +79,71 @@ def write_language_data(path: Path, data: LanguageDataFile) -> None:
 # --- Извлечение переводимых строк напрямую из Defs/*.xml (fallback, когда у мода
 # нет Languages/English) ---------------------------------------------------
 
-_TRANSLATABLE_FIELDS = {"label", "description", "labelNoun", "gerund", "reportString",
-                         "jobString", "letterText", "letterLabel", "text", "title"}
+# Теги, которые НИКОГДА не содержат переводимый текст, даже если их значение
+# формально проходит по эвристике ниже — это ссылки на другие defName/классы/
+# идентификаторы, а не человеческий текст, и переводить их означало бы сломать
+# ссылку на определение в другом месте мода/игры.
+_NEVER_TRANSLATABLE_TAGS = {
+    "defname", "class", "parentname", "workertype", "compclass", "thingclass",
+    "texpath", "graphicclass", "shaderclass", "soundtype", "drawertype",
+    "researchviewx", "researchviewy", "packageid", "identifier", "hediff",
+    "def", "recipeuser", "thingdef", "damagedef", "statdef", "verbclass",
+    "jobdef", "workgiverdef", "traitdef", "genedef", "driverclass",
+    "jobclass", "compclass", "workgiverclass", "mentalstateclass",
+    "incidentclass", "gizmoclass", "interactionclass",
+    # QuestScriptDef/квест-нода — служебные ссылки на переменные квеста
+    # ($siteTile, $rewardValue...) и параметры узлов, не текст для игрока.
+    "storeas", "tile", "faction", "sitepartdefs", "worldobject", "worldobjects",
+    "insignal", "outsignal", "delayticks", "value1", "value2",
+    "storesitepartsparamsas", "sitepartsparams",
+}
+
+# QuestScriptDef.*.rulesStrings хранит строки вида "ruleKey->текст" — только
+# часть после "->" может быть человеческим текстом, сам ключ до стрелки это
+# идентификатор правила генерации (напр. "distress->Distress Call").
+_RULE_STRING_RE = re.compile(r"^([\w.\[\]]+)->(.*)$", re.DOTALL)
+
+# defName-ссылки внутри списков (<recipeUsers><li>FabricationBench</li></...>)
+# обычно PascalCase-идентификаторы без пробелов и строчных служебных слов —
+# в отличие от настоящего текста вида "make bio clip" или "Making bio clip.".
+_LOOKS_LIKE_IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+# Составной идентификатор вида Namespace.ClassName / My.Nested.Class — типично
+# для driverClass/compClass и подобных ссылок на C#-типы, которые не всегда
+# заранее известны и не попадают в _NEVER_TRANSLATABLE_TAGS по имени тега.
+_LOOKS_LIKE_DOTTED_IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")
+_LOOKS_LIKE_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?%?$")
+_LOOKS_LIKE_PATH_OR_COLOR_RE = re.compile(r"^[\w/\\.]+$|^#[0-9A-Fa-f]{3,8}$")
+_HAS_LOWERCASE_WORD_RE = re.compile(r"\b[a-zа-яё]{2,}\b", re.IGNORECASE)
+
+
+def _looks_translatable(tag: str, text: str) -> bool:
+    """Эвристика "это человеческий текст, а не идентификатор/число/путь":
+    вместо белого списка конкретных имён тегов (который никогда не покрыл бы
+    все поля всех модов) проверяем сам текст. Явные технические теги
+    (defName, class, texPath...) исключены заранее списком выше, даже если
+    их значение случайно похоже на текст."""
+    if tag.lower() in _NEVER_TRANSLATABLE_TAGS:
+        return False
+    if not text or not text.strip():
+        return False
+    stripped = text.strip()
+    if _LOOKS_LIKE_NUMBER_RE.match(stripped):
+        return False
+    if stripped.lower() in ("true", "false"):
+        return False
+    if _LOOKS_LIKE_PATH_OR_COLOR_RE.match(stripped) and "/" in stripped or "\\" in stripped:
+        return False
+    if _LOOKS_LIKE_DOTTED_IDENTIFIER_RE.match(stripped):
+        return False
+    if " " in stripped:
+        return True
+    # Однословные значения: считаем текстом, только если это не голый
+    # PascalCase/camelCase идентификатор (defName-ссылки, enum-значения) —
+    # то есть если в нём вообще есть узнаваемое строчное слово (RimWorld
+    # почти никогда не пишет однословные label в чистом CamelCase).
+    if _LOOKS_LIKE_IDENTIFIER_RE.match(stripped) and stripped[0].isupper() and stripped.isalnum():
+        return False
+    return bool(_HAS_LOWERCASE_WORD_RE.search(stripped))
 
 
 @dataclass
@@ -89,6 +152,14 @@ class DefFieldRef:
     def_name: str
     field_path: str
     text: str
+
+
+def _is_rule_string(tag: str, text: str) -> bool:
+    """rulesStrings хранит "ключ->текст" (напр. "distress->Distress Call") —
+    сама строка возвращается целиком как обычный DefFieldRef, а защита
+    идентификатора-ключа от перевода происходит в translator.py тем же
+    способом, что и для плейсхолдеров {0}/{species}."""
+    return tag.lower() == "rulesstrings" and bool(_RULE_STRING_RE.match(text))
 
 
 def _walk_def(el: ET.Element, def_type: str, def_name: str, path_prefix: str,
@@ -104,12 +175,15 @@ def _walk_def(el: ET.Element, def_type: str, def_name: str, path_prefix: str,
                 li_grandchildren = [c for c in li if c.tag is not ET.Comment]
                 if li_grandchildren:
                     _walk_def(li, def_type, def_name, f"{cur_path}.{idx}", out)
-                elif li.text and li.text.strip() and tag in _TRANSLATABLE_FIELDS:
-                    out.append(DefFieldRef(def_type, def_name, f"{cur_path}.{idx}", li.text))
+                    continue
+                li_text = li.text or ""
+                li_path = f"{cur_path}.{idx}"
+                if _is_rule_string(tag, li_text) or _looks_translatable(tag, li_text):
+                    out.append(DefFieldRef(def_type, def_name, li_path, li_text))
             continue
         if list_children:
             _walk_def(child, def_type, def_name, cur_path, out)
-        elif child.text and child.text.strip() and tag in _TRANSLATABLE_FIELDS:
+        elif _looks_translatable(tag, child.text or ""):
             out.append(DefFieldRef(def_type, def_name, cur_path, child.text))
 
 
