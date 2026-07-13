@@ -48,6 +48,35 @@ def test_fully_qualified_class_name_tag_yields_short_def_type(tmp_path: Path) ->
     assert refs[0].def_type == "FooDef"
 
 
+def test_enum_like_type_id_fields_are_not_translatable(tmp_path: Path) -> None:
+    """Баг из celetech_shuttle_extension: moduleTypeID/slotTypeID/segmentTypeID
+    и списки installableSegmentTypes/installableModuleSlotTypes/
+    installableModuleTypes/installableSegmentSlotTypes хранят enum-подобные
+    строковые идентификаторы (cockpit, support, cargo...) для сопоставления
+    модулей с посадочными местами мода — не текст для игрока. Их значения
+    однословные и в нижнем регистре, поэтому старая эвристика (PascalCase)
+    их не отлавливала и переводила, из-за чего мод падал в лог RimWorld с
+    "defines unknown moduleTypeID unknown" при загрузке."""
+    refs = _extract(tmp_path, """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <ShuttleModuleDef>
+    <defName>TestModule</defName>
+    <label>test module</label>
+    <moduleTypeID>cockpit</moduleTypeID>
+    <installableSegmentTypes>
+      <li>cockpit</li>
+      <li>support</li>
+    </installableSegmentTypes>
+    <installableModuleSlotTypes>
+      <li>support</li>
+    </installableModuleSlotTypes>
+  </ShuttleModuleDef>
+</Defs>
+""")
+    by_path = {r.field_path: r.text for r in refs}
+    assert by_path == {"label": "test module"}
+
+
 def test_dotted_class_reference_is_not_translatable(tmp_path: Path) -> None:
     """Баг из bio_clip: driverClass="MyMod.JobDriver_DoThing" (составной
     идентификатор Namespace.ClassName) попадало в перевод по старой

@@ -111,6 +111,22 @@ _NEVER_TRANSLATABLE_TAGS = {
 # идентификатор правила генерации (напр. "distress->Distress Call").
 _RULE_STRING_RE = re.compile(r"^([\w.\[\]]+)->(.*)$", re.DOTALL)
 
+# Баг из celetech_shuttle_extension: поля вида moduleTypeID, slotTypeID,
+# segmentTypeID и списки installableSegmentTypes/installableModuleSlotTypes/
+# installableModuleTypes/installableSegmentSlotTypes хранят строковые
+# идентификаторы enum-подобного типа (напр. "cockpit", "support", "cargo"),
+# используемые модом для сопоставления модулей с посадочными местами — а не
+# текст для игрока. Их значения однословные и в нижнем регистре, поэтому
+# основная эвристика (PascalCase-идентификатор) их не отлавливала и
+# переводила — после чего мод переставал находить нужный тип и падал в лог с
+# "defines unknown moduleTypeID unknown" при загрузке. Имя тега — надёжный
+# сигнал здесь, независимо от формы значения.
+_ID_LIKE_TAG_RE = re.compile(r"TypeID$|SlotID$", re.IGNORECASE)
+_NEVER_TRANSLATABLE_TAG_PATTERNS = (
+    "installablesegmenttypes", "installablemoduleslottypes",
+    "installablemoduletypes", "installablesegmentslottypes",
+)
+
 # defName-ссылки внутри списков (<recipeUsers><li>FabricationBench</li></...>)
 # обычно PascalCase-идентификаторы без пробелов и строчных служебных слов —
 # в отличие от настоящего текста вида "make bio clip" или "Making bio clip.".
@@ -130,7 +146,10 @@ def _looks_translatable(tag: str, text: str) -> bool:
     все поля всех модов) проверяем сам текст. Явные технические теги
     (defName, class, texPath...) исключены заранее списком выше, даже если
     их значение случайно похоже на текст."""
-    if tag.lower() in _NEVER_TRANSLATABLE_TAGS:
+    tag_lower = tag.lower()
+    if tag_lower in _NEVER_TRANSLATABLE_TAGS:
+        return False
+    if _ID_LIKE_TAG_RE.search(tag) or tag_lower in _NEVER_TRANSLATABLE_TAG_PATTERNS:
         return False
     if not text or not text.strip():
         return False
