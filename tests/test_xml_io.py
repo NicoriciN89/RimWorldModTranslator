@@ -77,6 +77,43 @@ def test_enum_like_type_id_fields_are_not_translatable(tmp_path: Path) -> None:
     assert by_path == {"label": "test module"}
 
 
+def test_single_capitalized_word_label_is_translatable(tmp_path: Path) -> None:
+    """Баг из celetech_shuttle_extension: <label>Cockpit</label> — обычное
+    однословное название с большой буквы (RimWorld часто так пишет короткие
+    label) — ошибочно считалось PascalCase-идентификатором и не попадало в
+    перевод, потому что старая эвристика смотрела только на первую букву, не
+    на форму слова целиком. Настоящие составные идентификаторы (несколько
+    заглавных букв внутри слова, см. test_dotted_class_reference_is_not_translatable
+    и ниже) по-прежнему должны исключаться."""
+    refs = _extract(tmp_path, """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <ThingDef>
+    <defName>TestThing</defName>
+    <label>Cockpit</label>
+  </ThingDef>
+</Defs>
+""")
+    by_path = {r.field_path: r.text for r in refs}
+    assert by_path == {"label": "Cockpit"}
+
+
+def test_multi_hump_pascal_case_identifier_is_not_translatable(tmp_path: Path) -> None:
+    """Настоящий составной идентификатор (несколько заглавных букв внутри
+    одного слова, напр. defName-ссылка вида "FabricationBench") должен
+    оставаться исключённым, в отличие от обычного однословного label."""
+    refs = _extract(tmp_path, """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <RecipeDef>
+    <defName>TestRecipe</defName>
+    <recipeUsers>
+      <li>FabricationBench</li>
+    </recipeUsers>
+  </RecipeDef>
+</Defs>
+""")
+    assert refs == []
+
+
 def test_dotted_class_reference_is_not_translatable(tmp_path: Path) -> None:
     """Баг из bio_clip: driverClass="MyMod.JobDriver_DoThing" (составной
     идентификатор Namespace.ClassName) попадало в перевод по старой

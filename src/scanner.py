@@ -135,6 +135,26 @@ def _scan_defs_fallback(mod_root: Path) -> list[DefInjectedTask]:
     return result
 
 
+def _current_defs_text_by_key(mod_root: Path) -> dict[str, str]:
+    """Плоский словарь {defName.field_path: актуальный английский текст},
+    извлечённый прямо из Defs/*.xml (не из DefInjected) — используется, чтобы
+    заметить случаи, когда автор мода обновил текст в Defs, но забыл
+    синхронизировать Languages/English/DefInjected (см. scan_mod)."""
+    seen_defs_dirs: dict[Path, Path] = {}
+    for content_root in _resolve_content_roots(mod_root):
+        defs_dir = content_root / "Defs"
+        if defs_dir.is_dir():
+            seen_defs_dirs.setdefault(defs_dir.resolve(), defs_dir)
+
+    result: dict[str, str] = {}
+    for defs_dir in seen_defs_dirs.values():
+        for xml_file in defs_dir.rglob("*.xml"):
+            for ref in xml_io.extract_translatable_from_defs(xml_file):
+                key = f"{ref.def_name}.{ref.field_path}" if ref.field_path else ref.def_name
+                result[key] = ref.text
+    return result
+
+
 def scan_mod(mod_root: Path) -> ScanResult:
     languages_dir = _find_languages_dir(mod_root)
     english_dir = None
@@ -179,5 +199,22 @@ def scan_mod(mod_root: Path) -> ScanResult:
     for task in _scan_defs_fallback(mod_root):
         if task.def_type not in covered_def_types:
             def_injected.append(task)
+
+    # Некоторые моды обновляют текст (label/description/...) прямо в
+    # Defs/*.xml, но забывают синхронизировать Languages/English/DefInjected
+    # — RimWorld при этом показывает игроку АКТУАЛЬНЫЙ текст из Defs (мод
+    # celetech_shuttle_extension: label "Cockpit" в Defs против устаревшего
+    # "cockpit segment" в DefInjected). Если бы мы перевели устаревший текст
+    # из DefInjected, игрок в итоге видел бы английский оригинал (раз перевод
+    # не совпадает с тем, что мод ожидает подставить) или откровенно
+    # устаревший, не соответствующий игре перевод. Поэтому для каждого ключа,
+    # где Defs и DefInjected расходятся, подставляем актуальный текст из Defs.
+    current_defs_text = _current_defs_text_by_key(mod_root)
+    if current_defs_text:
+        for task in def_injected:
+            for entry in task.data.keyed_items():
+                current = current_defs_text.get(entry.key)
+                if current is not None and current != entry.text:
+                    entry.text = current
 
     return ScanResult(source_lang_dir="English", keyed=keyed, def_injected=def_injected)

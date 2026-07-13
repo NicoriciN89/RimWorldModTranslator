@@ -104,6 +104,29 @@ def test_fully_qualified_def_tag_matches_short_definjected_folder(tmp_path: Path
     assert result.def_injected[0].def_type == "FooDef"
 
 
+def test_stale_definjected_text_is_replaced_by_current_defs_text(tmp_path: Path) -> None:
+    """Баг из celetech_shuttle_extension: автор мода обновил label/description
+    в Defs/*.xml, но забыл синхронизировать Languages/English/DefInjected —
+    RimWorld при этом показывает игроку АКТУАЛЬНЫЙ текст из Defs, а не
+    устаревший из DefInjected. Раньше сканер безусловно доверял DefInjected
+    как источнику правды, из-за чего переводился устаревший (не
+    соответствующий игре) текст. Теперь при расхождении подставляется
+    актуальный текст из Defs."""
+    _write(tmp_path / "Languages" / "English" / "DefInjected" / "ThingDef" / "T.xml",
+           '<?xml version="1.0" encoding="utf-8"?>\n<LanguageData>\n'
+           '  <TestThing.label>old stale label</TestThing.label>\n'
+           '  <TestThing.description>A thing for testing.</TestThing.description>\n'
+           '</LanguageData>\n')
+    _write(tmp_path / "Defs" / "ThingDefs.xml", _DEFS_XML)
+
+    result = scanner.scan_mod(tmp_path)
+
+    assert len(result.def_injected) == 1
+    by_key = {e.key: e.text for e in result.def_injected[0].data.keyed_items()}
+    assert by_key["TestThing.label"] == "test thing"
+    assert by_key["TestThing.description"] == "A thing for testing."
+
+
 def test_nested_version_folder_does_not_duplicate_strings(tmp_path: Path) -> None:
     """Баг между v1.0.4 и v1.0.5: если LoadFolders.xml (или fallback по имени
     папки) возвращает и корень мода, и вложенную в него версионную папку

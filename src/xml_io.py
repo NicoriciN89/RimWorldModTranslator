@@ -137,7 +137,6 @@ _LOOKS_LIKE_IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _LOOKS_LIKE_DOTTED_IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")
 _LOOKS_LIKE_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?%?$")
 _LOOKS_LIKE_PATH_OR_COLOR_RE = re.compile(r"^[\w/\\.]+$|^#[0-9A-Fa-f]{3,8}$")
-_HAS_LOWERCASE_WORD_RE = re.compile(r"\b[a-zа-яё]{2,}\b", re.IGNORECASE)
 
 
 def _looks_translatable(tag: str, text: str) -> bool:
@@ -164,13 +163,20 @@ def _looks_translatable(tag: str, text: str) -> bool:
         return False
     if " " in stripped:
         return True
-    # Однословные значения: считаем текстом, только если это не голый
-    # PascalCase/camelCase идентификатор (defName-ссылки, enum-значения) —
-    # то есть если в нём вообще есть узнаваемое строчное слово (RimWorld
-    # почти никогда не пишет однословные label в чистом CamelCase).
-    if _LOOKS_LIKE_IDENTIFIER_RE.match(stripped) and stripped[0].isupper() and stripped.isalnum():
-        return False
-    return bool(_HAS_LOWERCASE_WORD_RE.search(stripped))
+    # Однословные значения: отличаем обычное капитализированное слово
+    # ("Cockpit", "Wall" — единственная заглавная буква, в начале) от
+    # настоящего PascalCase/camelCase идентификатора ("ShuttleReactorModuleDef"
+    # — несколько заглавных букв, "горбов" из нескольких слов, склеенных
+    # воедино). Баг из celetech_shuttle_extension: <label>Cockpit</label>
+    # ошибочно считалось идентификатором и не переводилось, потому что
+    # старая проверка смотрела только на первую букву, а не на форму слова
+    # целиком — RimWorld сплошь и рядом пишет однословные label с большой
+    # буквы, это не идентификатор.
+    if _LOOKS_LIKE_IDENTIFIER_RE.match(stripped) and stripped.isalnum():
+        has_inner_capital = any(c.isupper() for c in stripped[1:])
+        if stripped[0].isupper() and has_inner_capital:
+            return False
+    return True
 
 
 @dataclass
