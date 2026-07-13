@@ -23,25 +23,33 @@ pip install -r requirements.txt
 
 ### Готовый .exe (не нужен Python)
 
-Собранный файл лежит в `dist/RimWorldModTranslator.exe` — просто запустите
-его двойным кликом, окно откроется без установки Python. При первом запуске
-onefile-сборка несколько секунд распаковывается во временную папку — это
-нормально, не зависание.
+Собранный файл лежит в `dist/RimWorldModTranslator/RimWorldModTranslator.exe`
+— запустите его двойным кликом (не переносите отдельно от папки `_internal`
+рядом с ним, там все нужные библиотеки).
 
-Если файла нет (не собирали ещё или удалили `dist/`), пересоберите:
+Если файла нет (не собирали ещё или удалили `dist/`), пересоберите через
+готовый `RimWorldModTranslator.spec` (directory-based сборка — antivirus-
+friendlier, чем `--onefile`, см. "Известные ограничения"):
 
 ```powershell
 cd rimworld-mod-translator
 .venv\Scripts\activate
 pip install pyinstaller
-pyinstaller --onefile --windowed --name RimWorldModTranslator ^
-  --collect-all argostranslate --collect-all ctranslate2 ^
-  --collect-all sentencepiece --collect-all stanza ^
-  run_gui.py
+pyinstaller RimWorldModTranslator.spec --noconfirm
 ```
 
+Перед сборкой опционально положите готовый языковой пакет Argos `en->ru` в
+папку `bundled_packages/` в корне проекта (скопируйте папку вида
+`translate-en_ru-*` из `%LOCALAPPDATA%\argos-translate\packages` — она там
+появляется после первого использования пары en->ru) — тогда собранный .exe
+сможет переводить на русский сразу, без скачивания ~200 МБ через интернет
+при первом запуске у конечного пользователя (см. "LLM-доработка" ниже про
+похожую проблему с сетевыми зависаниями). Без этой папки сборка тоже
+работает — просто первый перевод на новый язык скачает нужный пакет сам.
+
 Сборка занимает 20–35 минут (torch и ctranslate2 внутри Argos Translate —
-тяжёлые пакеты), итоговый файл — около 230 МБ.
+тяжёлые пакеты), итоговый размер — около 235 МБ без `bundled_packages`
+или около 450 МБ с ним.
 
 ### Простое окно из исходников (для разработки)
 

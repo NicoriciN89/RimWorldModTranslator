@@ -2,6 +2,8 @@
 перевода в случайный третий язык — оба бага найдены на реальных модах."""
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 from src.translator import TranslationEngine
 
 
@@ -67,6 +69,38 @@ def test_named_placeholders_survive_translation() -> None:
     result = engine.translate("turned into a {species}")
     assert "{species}" in result
     assert "物种" not in result
+
+
+def test_ensure_ready_clears_installed_languages_cache_after_first_install() -> None:
+    """get_installed_languages() внутри самого argostranslate декорирован
+    @lru_cache — первый вызов (пакет ещё не установлен) навсегда кэширует
+    пустой результат. Без явного сброса кэша сразу после установки пакета
+    (встроенного или скачанного) повторный вызов вернул бы тот же пустой
+    список, и _ensure_ready() падал бы с StopIteration сразу после первой
+    же установки пакета "с нуля" — ровно тот сценарий, который встречает
+    любой пользователь при первом запуске программы."""
+    import argostranslate.translate as real_translate
+
+    fake_lang_en = MagicMock(code="en")
+    fake_lang_ru = MagicMock(code="ru")
+    fake_lang_en.get_translation = MagicMock(return_value="translation-object")
+
+    call_count = {"n": 0}
+
+    def fake_get_installed_languages():
+        call_count["n"] += 1
+        return [] if call_count["n"] == 1 else [fake_lang_en, fake_lang_ru]
+
+    fake_get_installed_languages.cache_clear = MagicMock()
+
+    with patch.object(real_translate, "get_installed_languages", fake_get_installed_languages):
+        with patch("src.translator._install_bundled_package", return_value=True):
+            engine = TranslationEngine("en", "ru")
+            engine._ensure_ready()
+
+    assert fake_get_installed_languages.cache_clear.called
+    assert call_count["n"] == 2
+    assert engine.is_ready()
 
 
 def test_rule_string_key_prefix_is_not_translated() -> None:

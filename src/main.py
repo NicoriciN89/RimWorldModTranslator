@@ -18,7 +18,7 @@ from .llm_polish import (
 )
 from .log_setup import get_logger
 from .safe_print import safe_print
-from .translator import get_engine
+from .translator import ArgosPackageSetupError, get_engine
 
 log = get_logger("main")
 
@@ -118,6 +118,20 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
     on_progress(0, total_strings, f"[3/4] Перевожу {source_lang} -> {target_lang} ({engine_label})...")
 
     engine = get_engine(source_lang, target_lang) if use_argos else None
+    if engine is not None and not engine.is_ready():
+        on_progress(0, total_strings,
+                    f"      Готовлю движок Argos для пары {source_lang}->{target_lang}: "
+                    f"если языковая модель ещё не скачана, программа сейчас скачает "
+                    f"её из интернета (один раз, ~50-300 МБ, может занять до нескольких минут)...")
+        try:
+            engine.ensure_ready()
+        except ArgosPackageSetupError as e:
+            raise ValueError(
+                f"{e} Проверьте подключение к интернету и попробуйте ещё раз. Если используете "
+                f"VPN — попробуйте временно его отключить (некоторые VPN-клиенты в режиме "
+                f"полного перехвата трафика мешают загрузке пакетов)."
+            ) from e
+        on_progress(0, total_strings, "      Движок Argos готов.")
     lang_name = LANG_HUMAN_NAMES.get(target_lang.lower(), target_lang)
     polisher = LlmPolisher(model=llm_model, lang_name=lang_name, enabled=use_llm)
 

@@ -3,7 +3,14 @@ __pycache__/
 *.pyc
 build/
 dist/
-*.spec
 output/
 .translation_cache.json
 translator.log
+
+# Встроенный языковой пакет Argos (en->ru, ~200 МБ) для сборки .exe без
+# скачивания при первом запуске — не хранится в git (слишком тяжёлый для
+# истории репозитория), нужен только локально перед PyInstaller-сборкой.
+# Взять из установленного Argos: скопировать папку translate-en_ru-* из
+# %LOCALAPPDATA%\argos-translate\packages (Windows) или
+# ~/.local/share/argos-translate/packages (Linux/Mac) сюда же.
+bundled_packages/
