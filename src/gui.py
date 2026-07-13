@@ -143,6 +143,16 @@ class TranslatorApp:
             variable=self.update_var,
         ).pack(side=LEFT)
 
+        # Комментарии с оригиналом
+        self.original_comments_var = BooleanVar(value=False)
+        comments_row = ttk.Frame(frame)
+        comments_row.pack(fill=X, pady=(0, 4))
+        ttk.Checkbutton(
+            comments_row,
+            text="Добавлять в файлы перевода комментарий с оригинальным английским текстом (для сверки)",
+            variable=self.original_comments_var,
+        ).pack(side=LEFT)
+
         # Кнопка
         self.translate_btn = ttk.Button(frame, text="Перевести", command=self._start_translation)
         self.translate_btn.pack(pady=10)
@@ -220,6 +230,7 @@ class TranslatorApp:
         use_llm = engine != ENGINE_ARGOS_ONLY
         llm_model = self.model_var.get() if use_llm else DEFAULT_MODEL
         update = self.update_var.get()
+        with_original_comments = self.original_comments_var.get()
 
         self.translate_btn.config(state=DISABLED)
         self.progress.config(value=0, maximum=100)
@@ -227,13 +238,14 @@ class TranslatorApp:
 
         self._worker = threading.Thread(
             target=self._run_translation,
-            args=(mod_path, out_path, lang_code, use_argos, use_llm, llm_model, update),
+            args=(mod_path, out_path, lang_code, use_argos, use_llm, llm_model, update, with_original_comments),
             daemon=True,
         )
         self._worker.start()
 
     def _run_translation(self, mod_path: Path, out_path: Path, lang_code: str,
-                          use_argos: bool, use_llm: bool, llm_model: str, update: bool) -> None:
+                          use_argos: bool, use_llm: bool, llm_model: str, update: bool,
+                          with_original_comments: bool) -> None:
         def on_progress(done: int, total: int, message: str) -> None:
             if message:
                 log.info(message)
@@ -241,14 +253,15 @@ class TranslatorApp:
                 log.debug("progress %d/%d", done, total)
             self._queue.put(("progress", done, total, message))
 
-        log.info("=== Запуск перевода: mod=%s out=%s lang=%s argos=%s llm=%s(%s) update=%s ===",
-                  mod_path, out_path, lang_code, use_argos, use_llm, llm_model, update)
+        log.info("=== Запуск перевода: mod=%s out=%s lang=%s argos=%s llm=%s(%s) update=%s comments=%s ===",
+                  mod_path, out_path, lang_code, use_argos, use_llm, llm_model, update, with_original_comments)
         try:
             result = main_module.translate_mod(
                 mod_path, out_path, "en", lang_code, on_progress=on_progress,
                 use_llm=use_llm, llm_model=llm_model, use_argos=use_argos, update=update,
                 llm_batch_size=main_module.LLM_BATCH_SIZE,
                 llm_parallel_requests=main_module.DEFAULT_PARALLEL_REQUESTS,
+                with_original_comments=with_original_comments,
             )
             log.info("Готово: %s", result)
             self._queue.put(("done", str(result)))

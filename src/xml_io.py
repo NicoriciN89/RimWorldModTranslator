@@ -15,6 +15,11 @@ class Entry:
     key: str
     text: str
     is_comment: bool = False
+    # Английский оригинал строки, сохранённый ДО того, как text заменяется
+    # переводом — используется только для необязательного комментария
+    # <!--EN: ...--> в выходном файле (см. write_language_data), чтобы можно
+    # было визуально сверить перевод с оригиналом без похода в исходный мод.
+    original_text: str | None = None
 
 
 @dataclass
@@ -59,12 +64,15 @@ def _escape_text(text: str) -> str:
     return text
 
 
-def write_language_data(path: Path, data: LanguageDataFile) -> None:
+def write_language_data(path: Path, data: LanguageDataFile, with_original_comments: bool = False) -> None:
     lines = [_XML_DECL, "<LanguageData>\n"]
     for entry in data.entries:
         if entry.is_comment:
             lines.append(f"  <!--{entry.text}-->\n")
         else:
+            if with_original_comments and entry.original_text is not None and entry.original_text != entry.text:
+                safe_original = entry.original_text.replace("-->", "--&gt;")
+                lines.append(f"  <!--EN: {safe_original}-->\n")
             lines.append(f"  <{entry.key}>{_escape_text(entry.text)}</{entry.key}>\n")
     lines.append("</LanguageData>\n")
 

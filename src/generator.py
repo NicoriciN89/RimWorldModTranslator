@@ -95,14 +95,15 @@ This is a translation-only add-on: install it together with the original mod and
     (about_dir / "About.xml").write_text(content, encoding="utf-8")
 
 
-def write_translated_mod(out_root: Path, scan: ScanResult, lang_code: str) -> None:
+def write_translated_mod(out_root: Path, scan: ScanResult, lang_code: str,
+                          with_original_comments: bool = False) -> None:
     lang_dir_name = rimworld_lang_dir_name(lang_code)
     lang_root = out_root / "Languages" / lang_dir_name
 
     for task in scan.keyed:
         out_path = lang_root / "Keyed" / task.rel_path
-        xml_io.write_language_data(out_path, task.data)
+        xml_io.write_language_data(out_path, task.data, with_original_comments)
 
     for task in scan.def_injected:
         out_path = lang_root / "DefInjected" / task.def_type / task.rel_path
-        xml_io.write_language_data(out_path, task.data)
+        xml_io.write_language_data(out_path, task.data, with_original_comments)

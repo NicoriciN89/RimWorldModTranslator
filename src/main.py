@@ -43,7 +43,8 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
                    use_llm: bool = False, llm_model: str = "qwen2.5:7b",
                    use_argos: bool = True, update: bool = False,
                    llm_batch_size: int = LLM_BATCH_SIZE,
-                   llm_parallel_requests: int = DEFAULT_PARALLEL_REQUESTS) -> Path:
+                   llm_parallel_requests: int = DEFAULT_PARALLEL_REQUESTS,
+                   with_original_comments: bool = False) -> Path:
     if not src.is_dir():
         raise ValueError(f"Папка мода не найдена: {src}")
     if not use_argos and not use_llm:
@@ -67,11 +68,15 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
     out_root = out_dir / f"{mod_name}_{target_lang.upper()}"
     lang_dir_name = rimworld_lang_dir_name(target_lang)
 
-    english_by_key = {
-        entry.key: entry.text
+    all_entries = [
+        entry
         for task in list(scan.keyed) + list(scan.def_injected)
         for entry in task.data.keyed_items()
-    }
+    ]
+    english_by_key = {entry.key: entry.text for entry in all_entries}
+    if with_original_comments:
+        for entry in all_entries:
+            entry.original_text = entry.text
 
     reused_keys: set[str] = set()
     if update:
@@ -114,7 +119,7 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
 
     def flush_to_disk() -> None:
         with flush_lock:
-            generator.write_translated_mod(out_root, scan, target_lang)
+            generator.write_translated_mod(out_root, scan, target_lang, with_original_comments)
 
     done = len(reused_keys)
     on_progress(done, total_strings, "")
@@ -191,6 +196,9 @@ def main() -> None:
     parser.add_argument("--update", action="store_true",
                          help="Доперевод: переводить только новые/изменившиеся строки, "
                               "остальное взять из уже существующего перевода в --out")
+    parser.add_argument("--with-original-comments", action="store_true",
+                         help="Добавлять в выходной XML комментарий <!--EN: ...--> с оригинальным "
+                              "английским текстом перед каждой переведённой строкой (для сверки)")
     args = parser.parse_args()
 
     from .log_setup import setup_logging
@@ -202,7 +210,8 @@ def main() -> None:
         translate_mod(args.src.resolve(), args.out.resolve(), args.source_lang, args.lang,
                        use_llm=args.llm, llm_model=args.llm_model,
                        use_argos=not args.no_argos, update=args.update,
-                       llm_batch_size=args.llm_batch_size, llm_parallel_requests=args.llm_parallel)
+                       llm_batch_size=args.llm_batch_size, llm_parallel_requests=args.llm_parallel,
+                       with_original_comments=args.with_original_comments)
     except ValueError as e:
         log.error("Перевод прерван: %s", e)
         raise SystemExit(str(e))
