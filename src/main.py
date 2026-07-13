@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from pathlib import Path
 from typing import Callable
 
 from . import generator, incremental, scanner
 from .generator import rimworld_lang_dir_name
-from .llm_polish import LANG_HUMAN_NAMES, LlmContext, LlmPolisher
+from .llm_polish import DEFAULT_PARALLEL_REQUESTS, LANG_HUMAN_NAMES, LlmContext, LlmPolisher
 from .log_setup import get_logger
 from .safe_print import safe_print
 from .translator import get_engine
@@ -34,10 +35,15 @@ def _default_progress(done: int, total: int, message: str) -> None:
     _progress(done, total)
 
 
+LLM_BATCH_SIZE = 12
+
+
 def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
                    on_progress: ProgressCallback = _default_progress,
                    use_llm: bool = False, llm_model: str = "qwen2.5:7b",
-                   use_argos: bool = True, update: bool = False) -> Path:
+                   use_argos: bool = True, update: bool = False,
+                   llm_batch_size: int = LLM_BATCH_SIZE,
+                   llm_parallel_requests: int = DEFAULT_PARALLEL_REQUESTS) -> Path:
     if not src.is_dir():
         raise ValueError(f"Папка мода не найдена: {src}")
     if not use_argos and not use_llm:
@@ -101,6 +107,15 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
         if entry.key not in reused_keys
     ]
 
+    original = generator.read_original_about(src)
+    generator.write_about_xml(out_root, original, target_lang)
+
+    flush_lock = threading.Lock()
+
+    def flush_to_disk() -> None:
+        with flush_lock:
+            generator.write_translated_mod(out_root, scan, target_lang)
+
     done = len(reused_keys)
     on_progress(done, total_strings, "")
 
@@ -112,24 +127,39 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
             entry.text = engine.translate(entry.text)
             done += 1
             on_progress(done, total_strings, "")
+        flush_to_disk()
 
     if use_llm:
         done = len(reused_keys)
         pass_label = "[3b/4] LLM" if use_argos else "[3/4] LLM"
-        on_progress(done, total_strings, f"{pass_label}: дорабатываю {len(entries_to_translate)} строк "
-                                          f"через {llm_model}...")
-        for entry in entries_to_translate:
-            log.debug("[LLM %d/%d] дорабатываю %s", done + 1, total_strings, entry.key)
-            original_text = english_by_key[entry.key]
-            entry.text = polisher.polish(original_text, entry.text, LlmContext(mod_name, entry.key))
-            done += 1
-            on_progress(done, total_strings, "")
+        on_progress(done, total_strings,
+                    f"{pass_label}: дорабатываю {len(entries_to_translate)} строк через {llm_model} "
+                    f"(пачками по {llm_batch_size}, до {llm_parallel_requests} запросов параллельно)...")
 
-    on_progress(done, total_strings, f"[4/4] Собираю мод-русификатор: {out_root}")
+        progress_lock = threading.Lock()
+        done_box = [done]
 
-    original = generator.read_original_about(src)
-    generator.write_about_xml(out_root, original, target_lang)
-    generator.write_translated_mod(out_root, scan, target_lang)
+        def on_batch_done(batch_start: int, batch_results: list[str]) -> None:
+            for entry, new_text in zip(entries_to_translate[batch_start:], batch_results):
+                entry.text = new_text
+            with progress_lock:
+                done_box[0] += len(batch_results)
+                on_progress(done_box[0], total_strings, "")
+            flush_to_disk()
+
+        items = [
+            (english_by_key[entry.key], entry.text, LlmContext(mod_name, entry.key))
+            for entry in entries_to_translate
+        ]
+        polisher.polish_many(
+            items, batch_size=llm_batch_size, parallel_requests=llm_parallel_requests,
+            on_batch_done=on_batch_done,
+        )
+        flush_to_disk()
+
+    on_progress(done, total_strings, f"[4/4] Дописываю мод-русификатор: {out_root}")
+
+    flush_to_disk()
     incremental.save_cache(out_root, english_by_key)
 
     on_progress(done, total_strings, f"Готово: {out_root}")
@@ -152,6 +182,10 @@ def main() -> None:
     parser.add_argument("--llm", action="store_true",
                          help="Дорабатывать черновик Argos локальной LLM через Ollama (если она запущена)")
     parser.add_argument("--llm-model", default="qwen2.5:7b", help="Модель Ollama для доработки перевода")
+    parser.add_argument("--llm-batch-size", type=int, default=LLM_BATCH_SIZE,
+                         help=f"Сколько строк отправлять LLM за один запрос (по умолчанию {LLM_BATCH_SIZE})")
+    parser.add_argument("--llm-parallel", type=int, default=DEFAULT_PARALLEL_REQUESTS,
+                         help=f"Сколько запросов к Ollama слать одновременно (по умолчанию {DEFAULT_PARALLEL_REQUESTS})")
     parser.add_argument("--no-argos", action="store_true",
                          help="Не использовать Argos Translate — переводить только через LLM (--llm обязателен)")
     parser.add_argument("--update", action="store_true",
@@ -167,7 +201,8 @@ def main() -> None:
     try:
         translate_mod(args.src.resolve(), args.out.resolve(), args.source_lang, args.lang,
                        use_llm=args.llm, llm_model=args.llm_model,
-                       use_argos=not args.no_argos, update=args.update)
+                       use_argos=not args.no_argos, update=args.update,
+                       llm_batch_size=args.llm_batch_size, llm_parallel_requests=args.llm_parallel)
     except ValueError as e:
         log.error("Перевод прерван: %s", e)
         raise SystemExit(str(e))

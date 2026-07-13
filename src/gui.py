@@ -247,6 +247,8 @@ class TranslatorApp:
             result = main_module.translate_mod(
                 mod_path, out_path, "en", lang_code, on_progress=on_progress,
                 use_llm=use_llm, llm_model=llm_model, use_argos=use_argos, update=update,
+                llm_batch_size=main_module.LLM_BATCH_SIZE,
+                llm_parallel_requests=main_module.DEFAULT_PARALLEL_REQUESTS,
             )
             log.info("Готово: %s", result)
             self._queue.put(("done", str(result)))
