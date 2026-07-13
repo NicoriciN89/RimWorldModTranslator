@@ -37,7 +37,8 @@ def _default_mods_dir() -> str:
 ENGINE_ARGOS_ONLY = "Только Argos (быстро)"
 ENGINE_LLM_ONLY = "Только LLM (медленно, качественнее)"
 ENGINE_BOTH = "Argos + LLM-доработка (рекомендовано)"
-ENGINES = [ENGINE_ARGOS_ONLY, ENGINE_BOTH, ENGINE_LLM_ONLY]
+ENGINE_BOTH_CHECK = "Argos + LLM-проверка ошибок (быстрее)"
+ENGINES = [ENGINE_ARGOS_ONLY, ENGINE_BOTH, ENGINE_BOTH_CHECK, ENGINE_LLM_ONLY]
 
 LANGUAGES = [
     ("Русский", "ru"),
@@ -228,6 +229,7 @@ class TranslatorApp:
         engine = self.engine_var.get()
         use_argos = engine != ENGINE_LLM_ONLY
         use_llm = engine != ENGINE_ARGOS_ONLY
+        llm_mode = main_module.LLM_MODE_CHECK if engine == ENGINE_BOTH_CHECK else main_module.LLM_MODE_REWRITE
         llm_model = self.model_var.get() if use_llm else DEFAULT_MODEL
         update = self.update_var.get()
         with_original_comments = self.original_comments_var.get()
@@ -238,14 +240,15 @@ class TranslatorApp:
 
         self._worker = threading.Thread(
             target=self._run_translation,
-            args=(mod_path, out_path, lang_code, use_argos, use_llm, llm_model, update, with_original_comments),
+            args=(mod_path, out_path, lang_code, use_argos, use_llm, llm_model, update,
+                  with_original_comments, llm_mode),
             daemon=True,
         )
         self._worker.start()
 
     def _run_translation(self, mod_path: Path, out_path: Path, lang_code: str,
                           use_argos: bool, use_llm: bool, llm_model: str, update: bool,
-                          with_original_comments: bool) -> None:
+                          with_original_comments: bool, llm_mode: str) -> None:
         def on_progress(done: int, total: int, message: str) -> None:
             if message:
                 log.info(message)
@@ -253,15 +256,15 @@ class TranslatorApp:
                 log.debug("progress %d/%d", done, total)
             self._queue.put(("progress", done, total, message))
 
-        log.info("=== Запуск перевода: mod=%s out=%s lang=%s argos=%s llm=%s(%s) update=%s comments=%s ===",
-                  mod_path, out_path, lang_code, use_argos, use_llm, llm_model, update, with_original_comments)
+        log.info("=== Запуск перевода: mod=%s out=%s lang=%s argos=%s llm=%s(%s, mode=%s) update=%s comments=%s ===",
+                  mod_path, out_path, lang_code, use_argos, use_llm, llm_model, llm_mode, update,
+                  with_original_comments)
         try:
             result = main_module.translate_mod(
                 mod_path, out_path, "en", lang_code, on_progress=on_progress,
                 use_llm=use_llm, llm_model=llm_model, use_argos=use_argos, update=update,
-                llm_batch_size=main_module.LLM_BATCH_SIZE,
                 llm_parallel_requests=main_module.DEFAULT_PARALLEL_REQUESTS,
-                with_original_comments=with_original_comments,
+                with_original_comments=with_original_comments, llm_mode=llm_mode,
             )
             log.info("Готово: %s", result)
             self._queue.put(("done", str(result)))

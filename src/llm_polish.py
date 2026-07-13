@@ -104,6 +104,48 @@ _BATCH_ITEM_TEMPLATE = "{idx}. Мод: {mod_name} | Поле: {field_key} | Ор
 
 _BATCH_LINE_RE = re.compile(r"^\s*(\d+)\s*:\s*(.*)$")
 
+# Режим "проверка ошибок": в отличие от polish_batch (который переписывает
+# КАЖДУЮ строку пачки), здесь модель только ИЩЕТ проблемы в черновике Argos
+# и возвращает исправления лишь для реально ошибочных строк — остальные не
+# упоминаются в ответе вовсе и остаются черновиком Argos без изменений. Это
+# и быстрее (можно слать большие пачки — модели не нужно переписывать всё,
+# только найти и поправить редкие ошибки), и безопаснее для уже нормального
+# перевода (нет риска, что модель "исправит" то, что и так было верно).
+CHECK_BATCH_SIZE = 20
+
+_CHECK_SYSTEM_PROMPT = """Ты — корректор перевода модов для игры RimWorld. Тебе дают пронумерованный
+список строк: для каждой — оригинал на английском и черновой машинный
+перевод на {lang_name}. Твоя задача — НАЙТИ ОШИБКИ в черновике, а не
+переписать всё заново.
+
+Ошибка — это: неправильное согласование (падеж, род, число), нарушенный
+порядок слов, пропущенный или искажённый смысл, остаток непереведённого
+английского текста, повреждённый плейсхолдер {{0}}/{{1}}/\\n. Если черновик
+уже звучит нормально и грамматически верно — это НЕ ошибка, даже если
+можно сформулировать чуть иначе.
+
+КРИТИЧЕСКИ ВАЖНО:
+- Не рассуждай, не объясняй, не пиши markdown.
+- Ответ должен быть ЗАКЛЮЧЁН между тегами <ans> и </ans>.
+- Внутри тегов — ТОЛЬКО строки вида "N: исправленный перевод", по одной на
+  каждый номер, где реально есть ошибка.
+- Строки БЕЗ ошибок вообще не упоминай в ответе — не пиши "N: OK" и т.п.,
+  просто пропусти этот номер.
+- Если ошибок нет вообще ни у одной строки — ответ должен быть <ans></ans>
+  (пустой, без единой строки внутри).
+
+Пример входа:
+1. Оригинал (EN): heavy-duty pipe | Черновой перевод: труба усиленный
+2. Оригинал (EN): shuttle | Черновой перевод: шаттл
+3. Оригинал (EN): cargo bay | Черновой перевод: грузовой отсек
+
+Пример ответа (только строка 1 содержала ошибку согласования):
+<ans>
+1: усиленная труба
+</ans>"""
+
+_CHECK_ITEM_TEMPLATE = "{idx}. Мод: {mod_name} | Поле: {field_key} | Оригинал (EN): {original} | Черновой перевод: {draft}"
+
 
 @dataclass
 class LlmContext:
@@ -336,6 +378,140 @@ class LlmPolisher:
                 list(pool.map(run_batch, range(len(batches))))
 
         return [text for batch_result in results for text in batch_result]
+
+    def check_and_fix_batch(self, items: list[tuple[str, str, LlmContext]],
+                             skip_trivial: bool = True) -> list[str]:
+        """Режим "проверка ошибок": в отличие от polish_batch, модель не
+        переписывает каждую строку, а только исправляет те, где реально нашла
+        проблему (согласование, порядок слов, остаток английского текста,
+        повреждённый плейсхолдер) — остальные строки остаются черновиком
+        Argos буквально без изменений. items — список (original, draft,
+        context), возвращает список того же размера и порядка."""
+        if not items:
+            return []
+        drafts = [draft for _, draft, _ in items]
+        if not self.enabled:
+            return drafts
+
+        if skip_trivial:
+            send_indices = [i for i, (original, _, _) in enumerate(items) if not is_trivial_string(original)]
+        else:
+            send_indices = list(range(len(items)))
+        if not send_indices:
+            return drafts
+
+        if not self._check_available():
+            return drafts
+
+        to_send = [items[i] for i in send_indices]
+        lines = [
+            _CHECK_ITEM_TEMPLATE.format(
+                idx=i + 1,
+                mod_name=context.mod_name or "неизвестен",
+                field_key=context.field_key or "неизвестно",
+                original=original,
+                draft=draft,
+            )
+            for i, (original, draft, context) in enumerate(to_send)
+        ]
+        prompt = "\n".join(lines)
+        system = _CHECK_SYSTEM_PROMPT.format(lang_name=self.lang_name)
+
+        payload = {
+            "model": self.model,
+            "system": system,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": 0.2,
+                # Проверка обычно правит меньшинство строк из пачки — ответ
+                # короче, чем при полном переписывании, но оставляем запас.
+                "num_predict": max(_MIN_NUM_PREDICT, _NUM_PREDICT_PER_ITEM * len(to_send) // 2),
+            },
+        }
+        log.debug("LLM-проверка: %d строк (из них тривиальных пропущено: %d)",
+                  len(to_send), len(items) - len(to_send))
+        started = time.monotonic()
+        result = list(drafts)
+        try:
+            req = urllib.request.Request(
+                self.base_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS * max(1, len(to_send) // 2)) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            raw = data.get("response", "").strip()
+            elapsed = time.monotonic() - started
+            fixes = self._extract_check_fixes(raw)
+            log.debug("LLM-проверка за %.1fs: %d строк исправлено из %d",
+                      elapsed, len(fixes), len(to_send))
+            for local_num, fixed_text in fixes.items():
+                if 1 <= local_num <= len(to_send):
+                    result[send_indices[local_num - 1]] = fixed_text
+            return result
+        except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
+            elapsed = time.monotonic() - started
+            log.warning("LLM-проверка упала за %.1fs (%d строк): %s — откат на черновики",
+                        elapsed, len(to_send), e)
+            return result
+
+    def check_and_fix_many(self, items: list[tuple[str, str, LlmContext]],
+                            batch_size: int = CHECK_BATCH_SIZE,
+                            parallel_requests: int = DEFAULT_PARALLEL_REQUESTS,
+                            skip_trivial: bool = True,
+                            on_batch_done: Callable[[int, list[str]], None] | None = None) -> list[str]:
+        """Аналог polish_many, но в режиме "проверка ошибок" (см.
+        check_and_fix_batch): строки без найденных ошибок возвращаются как
+        есть (черновик Argos), не переписываются моделью впустую."""
+        if not items:
+            return []
+        if not self.enabled or not self._check_available():
+            drafts = [draft for _, draft, _ in items]
+            if on_batch_done:
+                on_batch_done(0, drafts)
+            return drafts
+
+        batches = [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
+        offsets = [i * batch_size for i in range(len(batches))]
+        results: list[list[str]] = [[] for _ in batches]
+
+        def run_batch(idx: int) -> None:
+            batch_result = self.check_and_fix_batch(batches[idx], skip_trivial=skip_trivial)
+            results[idx] = batch_result
+            if on_batch_done:
+                on_batch_done(offsets[idx], batch_result)
+
+        workers = max(1, parallel_requests)
+        if workers == 1:
+            for i in range(len(batches)):
+                run_batch(i)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(run_batch, range(len(batches))))
+
+        return [text for batch_result in results for text in batch_result]
+
+    @staticmethod
+    def _extract_check_fixes(raw: str) -> dict[int, str]:
+        """Разбирает ответ режима "проверка ошибок": только те номера, для
+        которых модель реально дала исправление, отсутствующие номера
+        означают "ошибок не найдено" (это не сбой парсинга, а ожидаемый
+        случай — в отличие от _extract_batch_answers)."""
+        if not raw:
+            return {}
+        match = _ANSWER_RE.search(raw)
+        body = match.group(1) if match else raw
+        result: dict[int, str] = {}
+        for line in body.splitlines():
+            m = _BATCH_LINE_RE.match(line)
+            if not m:
+                continue
+            text = m.group(2).strip().strip('"')
+            if text:
+                result[int(m.group(1))] = text
+        return result
 
     @staticmethod
     def _extract_batch_answers(raw: str, expected_count: int) -> list[str] | None:

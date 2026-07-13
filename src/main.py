@@ -13,7 +13,9 @@ from typing import Callable
 
 from . import generator, incremental, scanner
 from .generator import rimworld_lang_dir_name
-from .llm_polish import DEFAULT_PARALLEL_REQUESTS, LANG_HUMAN_NAMES, LlmContext, LlmPolisher
+from .llm_polish import (
+    CHECK_BATCH_SIZE, DEFAULT_PARALLEL_REQUESTS, LANG_HUMAN_NAMES, LlmContext, LlmPolisher,
+)
 from .log_setup import get_logger
 from .safe_print import safe_print
 from .translator import get_engine
@@ -37,18 +39,36 @@ def _default_progress(done: int, total: int, message: str) -> None:
 
 LLM_BATCH_SIZE = 12
 
+# Режимы LLM-доработки:
+# "rewrite" — модель переписывает КАЖДУЮ строку пачки (polish_many), выше
+#             качество согласования в среднем, но тратит время даже на уже
+#             верные строки и есть небольшой риск "исправить" то, что и так
+#             было хорошо.
+# "check"   — модель сначала переводит ВЕСЬ мод через Argos на 100%, потом
+#             только ИЩЕТ ошибки в черновике большими пачками (check_and_fix_many)
+#             и правит лишь то, что реально сочла ошибкой — остальное остаётся
+#             черновиком Argos без изменений. Быстрее на модах, где Argos и
+#             так справляется с большинством строк.
+LLM_MODE_REWRITE = "rewrite"
+LLM_MODE_CHECK = "check"
+
 
 def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
                    on_progress: ProgressCallback = _default_progress,
                    use_llm: bool = False, llm_model: str = "qwen2.5:7b",
                    use_argos: bool = True, update: bool = False,
-                   llm_batch_size: int = LLM_BATCH_SIZE,
+                   llm_batch_size: int | None = None,
                    llm_parallel_requests: int = DEFAULT_PARALLEL_REQUESTS,
-                   with_original_comments: bool = False) -> Path:
+                   with_original_comments: bool = False,
+                   llm_mode: str = LLM_MODE_REWRITE) -> Path:
     if not src.is_dir():
         raise ValueError(f"Папка мода не найдена: {src}")
     if not use_argos and not use_llm:
         raise ValueError("Нужен хотя бы один движок перевода: Argos или LLM.")
+    if llm_mode == LLM_MODE_CHECK and not use_argos:
+        raise ValueError('Режим LLM "check" (проверка ошибок Argos) требует включённый Argos.')
+    if llm_batch_size is None:
+        llm_batch_size = CHECK_BATCH_SIZE if llm_mode == LLM_MODE_CHECK else LLM_BATCH_SIZE
 
     on_progress(0, 0, f"[1/4] Сканирую мод: {src}")
     scan = scanner.scan_mod(src)
@@ -87,11 +107,14 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
     else:
         on_progress(0, total_strings, f"[2/4] Всего строк к переводу: {total_strings}")
 
-    engine_label = {
-        (True, True): "Argos + LLM, двумя проходами",
-        (True, False): "только Argos",
-        (False, True): "только LLM",
-    }[(use_argos, use_llm)]
+    if use_argos and use_llm and llm_mode == LLM_MODE_CHECK:
+        engine_label = "Argos на 100%, затем LLM ищет и правит только ошибки"
+    else:
+        engine_label = {
+            (True, True): "Argos + LLM, двумя проходами",
+            (True, False): "только Argos",
+            (False, True): "только LLM",
+        }[(use_argos, use_llm)]
     on_progress(0, total_strings, f"[3/4] Перевожу {source_lang} -> {target_lang} ({engine_label})...")
 
     engine = get_engine(source_lang, target_lang) if use_argos else None
@@ -136,10 +159,16 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
 
     if use_llm:
         done = len(reused_keys)
+        is_check_mode = llm_mode == LLM_MODE_CHECK
         pass_label = "[3b/4] LLM" if use_argos else "[3/4] LLM"
-        on_progress(done, total_strings,
-                    f"{pass_label}: дорабатываю {len(entries_to_translate)} строк через {llm_model} "
-                    f"(пачками по {llm_batch_size}, до {llm_parallel_requests} запросов параллельно)...")
+        if is_check_mode:
+            on_progress(done, total_strings,
+                        f"{pass_label}: ищу и исправляю ошибки Argos через {llm_model} "
+                        f"(пачками по {llm_batch_size}, до {llm_parallel_requests} запросов параллельно)...")
+        else:
+            on_progress(done, total_strings,
+                        f"{pass_label}: дорабатываю {len(entries_to_translate)} строк через {llm_model} "
+                        f"(пачками по {llm_batch_size}, до {llm_parallel_requests} запросов параллельно)...")
 
         progress_lock = threading.Lock()
         done_box = [done]
@@ -156,10 +185,16 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
             (english_by_key[entry.key], entry.text, LlmContext(mod_name, entry.key))
             for entry in entries_to_translate
         ]
-        polisher.polish_many(
-            items, batch_size=llm_batch_size, parallel_requests=llm_parallel_requests,
-            on_batch_done=on_batch_done,
-        )
+        if is_check_mode:
+            polisher.check_and_fix_many(
+                items, batch_size=llm_batch_size, parallel_requests=llm_parallel_requests,
+                on_batch_done=on_batch_done,
+            )
+        else:
+            polisher.polish_many(
+                items, batch_size=llm_batch_size, parallel_requests=llm_parallel_requests,
+                on_batch_done=on_batch_done,
+            )
         flush_to_disk()
 
     on_progress(done, total_strings, f"[4/4] Дописываю мод-русификатор: {out_root}")
@@ -187,8 +222,14 @@ def main() -> None:
     parser.add_argument("--llm", action="store_true",
                          help="Дорабатывать черновик Argos локальной LLM через Ollama (если она запущена)")
     parser.add_argument("--llm-model", default="qwen2.5:7b", help="Модель Ollama для доработки перевода")
-    parser.add_argument("--llm-batch-size", type=int, default=LLM_BATCH_SIZE,
-                         help=f"Сколько строк отправлять LLM за один запрос (по умолчанию {LLM_BATCH_SIZE})")
+    parser.add_argument("--llm-mode", choices=[LLM_MODE_REWRITE, LLM_MODE_CHECK], default=LLM_MODE_REWRITE,
+                         help=f'"{LLM_MODE_REWRITE}" — LLM переписывает каждую строку (по умолчанию); '
+                              f'"{LLM_MODE_CHECK}" — Argos переводит всё на 100%%, затем LLM только ищет '
+                              f"и правит ошибки в черновике, не трогая уже верные строки (быстрее, "
+                              f"требует включённый Argos)")
+    parser.add_argument("--llm-batch-size", type=int, default=None,
+                         help=f"Сколько строк отправлять LLM за один запрос (по умолчанию {LLM_BATCH_SIZE} "
+                              f"для rewrite, {CHECK_BATCH_SIZE} для check)")
     parser.add_argument("--llm-parallel", type=int, default=DEFAULT_PARALLEL_REQUESTS,
                          help=f"Сколько запросов к Ollama слать одновременно (по умолчанию {DEFAULT_PARALLEL_REQUESTS})")
     parser.add_argument("--no-argos", action="store_true",
@@ -211,7 +252,7 @@ def main() -> None:
                        use_llm=args.llm, llm_model=args.llm_model,
                        use_argos=not args.no_argos, update=args.update,
                        llm_batch_size=args.llm_batch_size, llm_parallel_requests=args.llm_parallel,
-                       with_original_comments=args.with_original_comments)
+                       with_original_comments=args.with_original_comments, llm_mode=args.llm_mode)
     except ValueError as e:
         log.error("Перевод прерван: %s", e)
         raise SystemExit(str(e))
