@@ -208,7 +208,14 @@ def extract_translatable_from_defs(path: Path) -> list[DefFieldRef]:
     for def_el in root:
         if def_el.tag is ET.Comment:
             continue
-        def_type = def_el.tag
+        # RimWorld разрешает полностью квалифицированное имя класса как тег
+        # def-элемента (напр. <My.Namespace.FooDef>...</My.Namespace.FooDef>),
+        # когда имя класса неоднозначно между несколькими using-namespace'ами.
+        # Игра трактует его как обычный FooDef, и DefInjected-папка мода
+        # называется по короткому имени (последний сегмент) — без этого мы
+        # создавали бы отдельную (дублирующую) DefInjected-папку с полным
+        # путём вместо короткого имени, которое ожидает игра.
+        def_type = def_el.tag.rsplit(".", 1)[-1]
         name_el = def_el.find("defName")
         def_name = name_el.text.strip() if name_el is not None and name_el.text else None
         if not def_name:

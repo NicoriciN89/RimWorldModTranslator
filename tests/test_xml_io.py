@@ -30,6 +30,24 @@ def test_label_and_description_are_extracted(tmp_path: Path) -> None:
     assert by_path == {"label": "test thing", "description": "A thing for testing."}
 
 
+def test_fully_qualified_class_name_tag_yields_short_def_type(tmp_path: Path) -> None:
+    """RimWorld разрешает полностью квалифицированное имя класса как тег
+    def-элемента (напр. <My.Namespace.FooDef>...</My.Namespace.FooDef>) для
+    разрешения неоднозначности между namespace'ами — игра трактует его как
+    обычный FooDef, и Languages/<Lang>/DefInjected/ мода называется по
+    короткому имени (последний сегмент), а не по полному пути класса."""
+    refs = _extract(tmp_path, """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <My.Namespace.FooDef>
+    <defName>TestFoo</defName>
+    <label>test foo</label>
+  </My.Namespace.FooDef>
+</Defs>
+""")
+    assert len(refs) == 1
+    assert refs[0].def_type == "FooDef"
+
+
 def test_dotted_class_reference_is_not_translatable(tmp_path: Path) -> None:
     """Баг из bio_clip: driverClass="MyMod.JobDriver_DoThing" (составной
     идентификатор Namespace.ClassName) попадало в перевод по старой

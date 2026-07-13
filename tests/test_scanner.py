@@ -76,6 +76,34 @@ def test_definjected_partial_coverage_fills_gap(tmp_path: Path) -> None:
         ["TestThing.label", "TestThing.description"]
 
 
+def test_fully_qualified_def_tag_matches_short_definjected_folder(tmp_path: Path) -> None:
+    """Баг из celetech_shuttle_extension: RimWorld разрешает полностью
+    квалифицированное имя класса как тег def-элемента (напр.
+    <My.Namespace.FooDef>...</My.Namespace.FooDef>), а игра трактует его как
+    обычный FooDef — DefInjected-папка мода называется по короткому имени.
+    Раньше def_type брался как raw XML-тег целиком, из-за чего "покрыт ли
+    этот DefType в DefInjected" никогда не совпадало, и fallback-сканирование
+    дублировало уже покрытый контент под отдельной (неверной) папкой с
+    полным путём класса вместо короткого имени."""
+    qualified_defs_xml = """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <My.Namespace.FooDef>
+    <defName>TestFoo</defName>
+    <label>test foo</label>
+  </My.Namespace.FooDef>
+</Defs>
+"""
+    _write(tmp_path / "Languages" / "English" / "DefInjected" / "FooDef" / "F.xml",
+           '<?xml version="1.0" encoding="utf-8"?>\n<LanguageData>\n'
+           '  <TestFoo.label>test foo</TestFoo.label>\n</LanguageData>\n')
+    _write(tmp_path / "Defs" / "FooDefs.xml", qualified_defs_xml)
+
+    result = scanner.scan_mod(tmp_path)
+
+    assert len(result.def_injected) == 1
+    assert result.def_injected[0].def_type == "FooDef"
+
+
 def test_nested_version_folder_does_not_duplicate_strings(tmp_path: Path) -> None:
     """Баг между v1.0.4 и v1.0.5: если LoadFolders.xml (или fallback по имени
     папки) возвращает и корень мода, и вложенную в него версионную папку
