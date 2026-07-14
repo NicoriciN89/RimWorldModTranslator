@@ -70,7 +70,7 @@ def write_about_xml(out_root: Path, original: OriginalModInfo, lang_code: str,
 
     content = f"""<?xml version="1.0" encoding="utf-8"?>
 <ModMetaData>
-  <name>{mod_name} [{lang_code.upper()}]</name>
+  <name>{mod_name} - {lang_dir}</name>
   <author>{translator_tag}</author>
   <description>Automatic {lang_dir} translation of "{mod_name}", generated offline by {translator_tag}.
 
