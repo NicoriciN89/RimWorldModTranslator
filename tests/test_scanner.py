@@ -165,9 +165,15 @@ def test_load_folders_xml_picks_only_newest_version(tmp_path: Path) -> None:
     assert keys == ["TestThing.label", "TestThing.description"]
 
 
-def test_load_folders_xml_skips_if_mod_active_paths(tmp_path: Path) -> None:
-    """Пути с условием IfModActive пропускаются — нет данных об установленных
-    у пользователя модах, безопаснее не рассматривать эту ветку как активную."""
+def test_load_folders_xml_scans_if_mod_active_paths(tmp_path: Path) -> None:
+    """Баг из alpha_memes: пути с условием IfModActive (обычно DLC-специфичный
+    контент вроде Mods/Biotech, Mods/Royalty, Mods/Anomaly) раньше
+    пропускались целиком — под предлогом "нет данных об установленных у
+    пользователя DLC/модах". На практике это означало, что весь DLC-контент
+    крупных модов НИКОГДА не переводился, даже если у игрока эти официальные
+    DLC реально установлены (частый случай). Теперь такие пути сканируются
+    безусловно — лишние строки для неактивного контента не вредят, в отличие
+    от отсутствия перевода активного контента."""
     _write(tmp_path / "1.6" / "Defs" / "ThingDefs.xml", _DEFS_XML)
     _write(tmp_path / "1.6" / "Mods" / "SomeMod" / "Defs" / "ThingDefs.xml",
            _DEFS_XML.replace("TestThing", "OptionalThing"))
@@ -182,6 +188,6 @@ def test_load_folders_xml_skips_if_mod_active_paths(tmp_path: Path) -> None:
 
     result = scanner.scan_mod(tmp_path)
 
-    assert len(result.def_injected) == 1
-    keys = [e.key for e in result.def_injected[0].data.keyed_items()]
-    assert keys == ["TestThing.label", "TestThing.description"]
+    keys = sorted(e.key for task in result.def_injected for e in task.data.keyed_items())
+    assert keys == ["OptionalThing.description", "OptionalThing.label",
+                     "TestThing.description", "TestThing.label"]
