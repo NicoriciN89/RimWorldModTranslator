@@ -111,3 +111,35 @@ def test_rule_string_key_prefix_is_not_translated() -> None:
     result = engine.translate("distress->Distress Call")
     assert result.startswith("distress->")
     assert "DISTRESS CALL" in result
+
+
+def test_rule_string_key_with_parenthesized_params_is_not_translated() -> None:
+    """Баг из alpha_memes: MemeDef.*.rulesStrings часто хранит ключ с
+    параметрами вида "founderJoin(tag=meme_Artist)     ->текст" (с
+    произвольными пробелами перед стрелкой) — старый regex защищал только
+    голое "word->", а всё, что содержало скобки/пробелы/"=" перед стрелкой,
+    уходило в перевод целиком, коверкая "meme_Artist" в "meme Artist" и
+    делая текст непригодным для системы генерации истории RimWorld."""
+    engine = _engine_with_fake_translate(lambda text: text.upper())
+    result = engine.translate("founderJoin(tag=meme_Artist)     ->our founder was inspired")
+    assert result.startswith("founderJoin(tag=meme_Artist)     ->")
+    assert "OUR FOUNDER WAS INSPIRED" in result
+
+
+def test_bracketed_grammar_tokens_survive_translation() -> None:
+    """Баг из alpha_memes: квадратноскобочные токены вида [founderName],
+    [founder_pronoun], [deity0_name] внутри rulesStrings — это плейсхолдеры
+    системы генерации истории идеологии RimWorld (Grammar/RulePack), не
+    текст для игрока. Раньше они не были защищены вовсе и уходили в перевод
+    как обычный текст: подчёркивание в "[founder_pronoun]" стиралось до
+    "[founder pronoun]", из-за чего игра не находила нужный тег и падала в
+    лог с "Bad string pass when reading rule"."""
+    engine = _engine_with_fake_translate(lambda text: text.replace("_", " ").upper())
+    result = engine.translate(
+        "[founderName] spent decades perfecting [founder_possessive] style, "
+        "and [founder_pronoun] was considered a true master."
+    )
+    assert "[founderName]" in result
+    assert "[founder_possessive]" in result
+    assert "[founder_pronoun]" in result
+    assert "[founder pronoun]" not in result

@@ -1,19 +1,6 @@
 """Обёртка над Argos Translate: офлайн-перевод строк с защитой плейсхолдеров
-({0}, {1}, {species}, {PAWN_nameDef}...) и литеральных \\n/\\r от искажения
-моделью перевода.
-
-Плейсхолдеры никогда не передаются модели как текст: она может их
-транслитерировать и просклонять (напр. "PLACEHOLDERONE" в русском переводе
-превращалось в "ПЛАСЕХОЛДЕРОНА"), а именованные плейсхолдеры вида {species}
-она иногда переводит как обычное слово и даже на случайный третий язык
-(напр. {species} -> {物种}). Вместо этого текст режется на сегменты по
-границам плейсхолдеров, переводится только то, что между ними, а сами
-плейсхолдеры склеиваются обратно как литералы после перевода.
-
-Той же защитой покрыт префикс "ключ->" в начале строки — формат
-QuestScriptDef.*.rulesStrings ("distress->Distress Call"), где часть до
-стрелки это идентификатор правила генерации, а не переводимый текст.
-"""
+от искажения моделью перевода — какие именно плейсхолдеры защищаются и
+почему, см. rimworld_rules.TRANSLATION_PLACEHOLDER_RE."""
 from __future__ import annotations
 
 import json
@@ -24,12 +11,11 @@ from functools import lru_cache
 from pathlib import Path
 
 from .glossary import GlossaryContext
+from .rimworld_rules import TRANSLATION_PLACEHOLDER_RE as _PLACEHOLDER_RE
 from .safe_print import safe_print
 from .log_setup import get_logger
 
 log = get_logger("translator")
-
-_PLACEHOLDER_RE = re.compile(r"\{\w+\}|\\n|\\r|^[\w.\[\]]+->")
 
 # Argos иногда даёт перевод не на целевой язык вместо русского для редких/
 # составных слов, которых нет в её словаре (напр. случайные китайские

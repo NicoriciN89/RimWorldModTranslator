@@ -48,6 +48,31 @@ def test_fully_qualified_class_name_tag_yields_short_def_type(tmp_path: Path) ->
     assert refs[0].def_type == "FooDef"
 
 
+def test_description_with_literal_backslash_is_still_translatable(tmp_path: Path) -> None:
+    """Баг из alpha_memes: _looks_translatable() проверяло
+    "regex.match(text) and '/' in text or '\\\\' in text" БЕЗ скобок —
+    из-за приоритета операторов это парсилось как
+    (regex.match AND '/' in text) OR ('\\\\' in text), то есть ЛЮБОЙ текст,
+    содержащий обратный слэш ГДЕ УГОДНО (напр. буквальный "\\n\\n" внутри
+    длинного multi-line description с rich-text разметкой), целиком
+    отбрасывался как "похоже на путь" — даже настоящие многострочные
+    описания на десятки слов. Реальный кейс: описание структуры идеологии
+    с "\\n\\n<color=#E5E54C>Gameplay effect:</color>\\n - ..." внутри —
+    целиком пропадало из перевода."""
+    xml = """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <MemeDef>
+    <defName>TestStructure</defName>
+    <description>This culture has fallen from grace entirely.\\n\\n&lt;color=#E5E54C&gt;Gameplay effect:&lt;/color&gt;\\n - Some detail here.</description>
+  </MemeDef>
+</Defs>
+"""
+    refs = _extract(tmp_path, xml)
+    by_path = {r.field_path: r.text for r in refs}
+    assert "description" in by_path
+    assert by_path["description"].startswith("This culture has fallen from grace entirely.")
+
+
 def test_enum_like_type_id_fields_are_not_translatable(tmp_path: Path) -> None:
     """Баг из celetech_shuttle_extension: moduleTypeID/slotTypeID/segmentTypeID
     и списки installableSegmentTypes/installableModuleSlotTypes/

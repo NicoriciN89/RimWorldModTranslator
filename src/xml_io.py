@@ -1,11 +1,16 @@
 """Чтение и запись RimWorld LanguageData XML (Keyed / DefInjected) с сохранением
-порядка ключей, комментариев-разделителей и оригинального форматирования тегов."""
+порядка ключей, комментариев-разделителей и оригинального форматирования тегов.
+
+Что считать переводимым текстом при извлечении из Defs/*.xml — не решается
+здесь напрямую, см. rimworld_rules.py (база знаний с примерами модов, на
+которых найдено каждое правило)."""
 from __future__ import annotations
 
-import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from . import rimworld_rules
 
 _XML_DECL = '<?xml version="1.0" encoding="utf-8"?>\n'
 
@@ -86,97 +91,8 @@ def write_language_data(path: Path, data: LanguageDataFile, with_original_commen
 
 # --- Извлечение переводимых строк напрямую из Defs/*.xml (fallback, когда у мода
 # нет Languages/English) ---------------------------------------------------
-
-# Теги, которые НИКОГДА не содержат переводимый текст, даже если их значение
-# формально проходит по эвристике ниже — это ссылки на другие defName/классы/
-# идентификаторы, а не человеческий текст, и переводить их означало бы сломать
-# ссылку на определение в другом месте мода/игры.
-_NEVER_TRANSLATABLE_TAGS = {
-    "defname", "class", "parentname", "workertype", "compclass", "thingclass",
-    "texpath", "graphicclass", "shaderclass", "soundtype", "drawertype",
-    "researchviewx", "researchviewy", "packageid", "identifier", "hediff",
-    "def", "recipeuser", "thingdef", "damagedef", "statdef", "verbclass",
-    "jobdef", "workgiverdef", "traitdef", "genedef", "driverclass",
-    "jobclass", "compclass", "workgiverclass", "mentalstateclass",
-    "incidentclass", "gizmoclass", "interactionclass",
-    # QuestScriptDef/квест-нода — служебные ссылки на переменные квеста
-    # ($siteTile, $rewardValue...) и параметры узлов, не текст для игрока.
-    "storeas", "tile", "faction", "sitepartdefs", "worldobject", "worldobjects",
-    "insignal", "outsignal", "delayticks", "value1", "value2",
-    "storesitepartsparamsas", "sitepartsparams",
-}
-
-# QuestScriptDef.*.rulesStrings хранит строки вида "ruleKey->текст" — только
-# часть после "->" может быть человеческим текстом, сам ключ до стрелки это
-# идентификатор правила генерации (напр. "distress->Distress Call").
-_RULE_STRING_RE = re.compile(r"^([\w.\[\]]+)->(.*)$", re.DOTALL)
-
-# Баг из celetech_shuttle_extension: поля вида moduleTypeID, slotTypeID,
-# segmentTypeID и списки installableSegmentTypes/installableModuleSlotTypes/
-# installableModuleTypes/installableSegmentSlotTypes хранят строковые
-# идентификаторы enum-подобного типа (напр. "cockpit", "support", "cargo"),
-# используемые модом для сопоставления модулей с посадочными местами — а не
-# текст для игрока. Их значения однословные и в нижнем регистре, поэтому
-# основная эвристика (PascalCase-идентификатор) их не отлавливала и
-# переводила — после чего мод переставал находить нужный тип и падал в лог с
-# "defines unknown moduleTypeID unknown" при загрузке. Имя тега — надёжный
-# сигнал здесь, независимо от формы значения.
-_ID_LIKE_TAG_RE = re.compile(r"TypeID$|SlotID$", re.IGNORECASE)
-_NEVER_TRANSLATABLE_TAG_PATTERNS = (
-    "installablesegmenttypes", "installablemoduleslottypes",
-    "installablemoduletypes", "installablesegmentslottypes",
-)
-
-# defName-ссылки внутри списков (<recipeUsers><li>FabricationBench</li></...>)
-# обычно PascalCase-идентификаторы без пробелов и строчных служебных слов —
-# в отличие от настоящего текста вида "make bio clip" или "Making bio clip.".
-_LOOKS_LIKE_IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
-# Составной идентификатор вида Namespace.ClassName / My.Nested.Class — типично
-# для driverClass/compClass и подобных ссылок на C#-типы, которые не всегда
-# заранее известны и не попадают в _NEVER_TRANSLATABLE_TAGS по имени тега.
-_LOOKS_LIKE_DOTTED_IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")
-_LOOKS_LIKE_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?%?$")
-_LOOKS_LIKE_PATH_OR_COLOR_RE = re.compile(r"^[\w/\\.]+$|^#[0-9A-Fa-f]{3,8}$")
-
-
-def _looks_translatable(tag: str, text: str) -> bool:
-    """Эвристика "это человеческий текст, а не идентификатор/число/путь":
-    вместо белого списка конкретных имён тегов (который никогда не покрыл бы
-    все поля всех модов) проверяем сам текст. Явные технические теги
-    (defName, class, texPath...) исключены заранее списком выше, даже если
-    их значение случайно похоже на текст."""
-    tag_lower = tag.lower()
-    if tag_lower in _NEVER_TRANSLATABLE_TAGS:
-        return False
-    if _ID_LIKE_TAG_RE.search(tag) or tag_lower in _NEVER_TRANSLATABLE_TAG_PATTERNS:
-        return False
-    if not text or not text.strip():
-        return False
-    stripped = text.strip()
-    if _LOOKS_LIKE_NUMBER_RE.match(stripped):
-        return False
-    if stripped.lower() in ("true", "false"):
-        return False
-    if _LOOKS_LIKE_PATH_OR_COLOR_RE.match(stripped) and "/" in stripped or "\\" in stripped:
-        return False
-    if _LOOKS_LIKE_DOTTED_IDENTIFIER_RE.match(stripped):
-        return False
-    if " " in stripped:
-        return True
-    # Однословные значения: отличаем обычное капитализированное слово
-    # ("Cockpit", "Wall" — единственная заглавная буква, в начале) от
-    # настоящего PascalCase/camelCase идентификатора ("ShuttleReactorModuleDef"
-    # — несколько заглавных букв, "горбов" из нескольких слов, склеенных
-    # воедино). Баг из celetech_shuttle_extension: <label>Cockpit</label>
-    # ошибочно считалось идентификатором и не переводилось, потому что
-    # старая проверка смотрела только на первую букву, а не на форму слова
-    # целиком — RimWorld сплошь и рядом пишет однословные label с большой
-    # буквы, это не идентификатор.
-    if _LOOKS_LIKE_IDENTIFIER_RE.match(stripped) and stripped.isalnum():
-        has_inner_capital = any(c.isupper() for c in stripped[1:])
-        if stripped[0].isupper() and has_inner_capital:
-            return False
-    return True
+#
+# Что считается переводимым текстом — см. rimworld_rules.py.
 
 
 @dataclass
@@ -185,14 +101,6 @@ class DefFieldRef:
     def_name: str
     field_path: str
     text: str
-
-
-def _is_rule_string(tag: str, text: str) -> bool:
-    """rulesStrings хранит "ключ->текст" (напр. "distress->Distress Call") —
-    сама строка возвращается целиком как обычный DefFieldRef, а защита
-    идентификатора-ключа от перевода происходит в translator.py тем же
-    способом, что и для плейсхолдеров {0}/{species}."""
-    return tag.lower() == "rulesstrings" and bool(_RULE_STRING_RE.match(text))
 
 
 def _walk_def(el: ET.Element, def_type: str, def_name: str, path_prefix: str,
@@ -211,12 +119,13 @@ def _walk_def(el: ET.Element, def_type: str, def_name: str, path_prefix: str,
                     continue
                 li_text = li.text or ""
                 li_path = f"{cur_path}.{idx}"
-                if _is_rule_string(tag, li_text) or _looks_translatable(tag, li_text):
+                if rimworld_rules.is_rule_string(tag, li_text) or \
+                        rimworld_rules.is_translatable_field(tag, li_text):
                     out.append(DefFieldRef(def_type, def_name, li_path, li_text))
             continue
         if list_children:
             _walk_def(child, def_type, def_name, cur_path, out)
-        elif _looks_translatable(tag, child.text or ""):
+        elif rimworld_rules.is_translatable_field(tag, child.text or ""):
             out.append(DefFieldRef(def_type, def_name, cur_path, child.text))
 
 
