@@ -2,6 +2,7 @@
 перевода в случайный третий язык — оба бага найдены на реальных модах."""
 from __future__ import annotations
 
+import re
 from unittest.mock import MagicMock, patch
 
 from src.translator import TranslationEngine
@@ -69,6 +70,55 @@ def test_named_placeholders_survive_translation() -> None:
     result = engine.translate("turned into a {species}")
     assert "{species}" in result
     assert "物种" not in result
+
+
+def test_rich_text_color_tags_survive_translation() -> None:
+    """Баг из alpha_memes: <color=#RRGGBB>...</color> отдавалось модели как
+    обычный текст — NMT-модель не обучена на HTML/rich-text разметке внутри
+    предложений и иногда просто не воспроизводит закрывающий тег в выводе,
+    даже когда сам текст короткий. Здесь фейковый translate нарочно "теряет"
+    любой тег вида <...>, чтобы отличить настоящую защиту от случайного
+    совпадения."""
+    def fake(text: str) -> str:
+        return re.sub(r"<[^>]*>", "", text).upper()
+
+    engine = _engine_with_fake_translate(fake)
+    result = engine.translate("some text <color=#33d733>colored part</color> more text")
+    assert "<color=#33d733>" in result
+    assert "</color>" in result
+
+
+def test_glossary_truncation_falls_back_to_no_glossary_translation() -> None:
+    """Баг из alpha_memes ("Ocular Warping ritual" рядом с глоссарным
+    токеном-заглушкой): модель иногда детерминированно обрывает генерацию
+    сразу после токена-заглушки Zqg{N}, теряя весь хвост предложения после
+    термина — не порча в третий язык (CJK), а именно преждевременная
+    остановка. Здесь фейковый translate нарочно обрезает текст сразу после
+    токена-заглушки (сохраняя регистр, как это реально делает Argos, чтобы
+    restore() из glossary.py мог найти и подставить термин обратно), но
+    переводит нормально без неё — проверяем, что результат подхватывает
+    более длинный (неусечённый) вариант без глоссария вместо усечённого."""
+    def fake(text: str) -> str:
+        if "Zqg" in text:
+            # Обрезаем сразу после токена-заглушки, теряя длинный хвост —
+            # регистр токена сохраняем, иначе glossary.restore() не найдёт
+            # его в тексте и не сможет восстановить термин обратно.
+            before, _, after = text.partition("Zqg0")
+            return before.strip() + " Zqg0."
+        return text.upper()
+
+    engine = _engine_with_fake_translate(fake)
+    # "ritual" в глоссарии — при защите текст станет "... prologue text
+    # Ocular Warping Zqg0 <long tail lost by the bug>", мок оборвёт вывод
+    # сразу после токена, теряя длинный хвост целиком (в отличие от
+    # реального Argos, который иногда переводит пару слов после токена
+    # перед обрывом) — так соотношение длин надёжно ниже порога.
+    result = engine.translate(
+        "Short prologue using the Ocular Warping ritual and then a very long tail "
+        "of many additional words that should absolutely not be lost in translation "
+        "if everything works correctly as expected here today."
+    )
+    assert "tail" in result.lower() or "TAIL" in result
 
 
 def test_ensure_ready_clears_installed_languages_cache_after_first_install() -> None:

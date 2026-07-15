@@ -42,7 +42,7 @@ def save_cache(out_root: Path, english_by_key: dict[str, str]) -> None:
 
 def _existing_translations(out_root: Path, lang_dir_name: str) -> dict[str, str]:
     """Читает уже собранный переведённый мод и возвращает {ключ: переведённый_текст}
-    по всем Keyed/DefInjected файлам, которые там нашлись."""
+    по всем Keyed/DefInjected/Strings файлам, которые там нашлись."""
     lang_root = out_root / "Languages" / lang_dir_name
     result: dict[str, str] = {}
     if not lang_root.is_dir():
@@ -54,6 +54,18 @@ def _existing_translations(out_root: Path, lang_dir_name: str) -> dict[str, str]
             continue
         for xml_file in sub_dir.rglob("*.xml"):
             data = xml_io.parse_language_data(xml_file)
+            for entry in data.keyed_items():
+                result[entry.key] = entry.text
+
+    strings_dir = lang_root / "Strings"
+    if strings_dir.is_dir():
+        # Ключи строятся так же, как при сканировании исходника (scanner.
+        # _scan_strings): "Strings/<путь>:<номер строки>" — структура файла
+        # (включая комментарии и пустые строки) при записи сохраняется 1:1,
+        # поэтому номера строк в переводе совпадают с оригиналом.
+        for txt_file in strings_dir.rglob("*.txt"):
+            rel = txt_file.relative_to(strings_dir)
+            data = xml_io.parse_strings_file(txt_file, key_prefix=f"Strings/{rel.as_posix()}")
             for entry in data.keyed_items():
                 result[entry.key] = entry.text
     return result
@@ -74,7 +86,7 @@ def apply_incremental(scan: ScanResult, out_root: Path, lang_dir_name: str) -> s
     old_translations = _existing_translations(out_root, lang_dir_name)
 
     reused_keys: set[str] = set()
-    for task in list(scan.keyed) + list(scan.def_injected):
+    for task in list(scan.keyed) + list(scan.def_injected) + list(scan.strings):
         for entry in task.data.keyed_items():
             unchanged = old_english.get(entry.key) == entry.text
             has_translation = entry.key in old_translations

@@ -36,6 +36,55 @@ def test_installable_types_keywords_are_never_translatable() -> None:
     assert not is_never_translatable_tag("installedComps")
 
 
+def test_defname_suffix_tags_are_never_translatable() -> None:
+    """Найдено на: celetech_shuttle_extension (Patches): integrationDefName
+    и подобные теги — явные ссылки на defName другого def-а."""
+    assert is_never_translatable_tag("integrationDefName")
+    assert not is_never_translatable_tag("label")
+
+
+def test_values_without_letters_are_not_translatable() -> None:
+    """Найдено на: rustic_workbenches (Patches): drawSize "(5,3)" — векторы
+    и кортежи без единой буквы не текст."""
+    assert not is_translatable_value("(5,3)")
+    assert not is_translatable_value("(0.5, 1.2, 3)")
+    assert is_translatable_value("3 walls")  # буквы есть — текст
+
+
+def test_impact_enum_field_is_never_translatable() -> None:
+    """Найдено на: alpha_memes (PreceptDef): impact "low"/"medium"/"high" —
+    enum PreceptImpact, перевод давал ошибку DefInjected в логе игры."""
+    assert is_never_translatable_tag("impact")
+    assert not is_never_translatable_tag("description")
+
+
+def test_defname_reference_list_tags_are_never_translatable() -> None:
+    """Найдено на: rustic_workbenches/cables_and_plumbing (stuffCategories),
+    more_informative_ideology (associatedMemes), alpha_memes (styles) —
+    списки ссылок на defName, чьи элементы выглядят как обычные слова
+    ("Stony", "Guilty", "Morbid") и не отлавливаются эвристикой по значению."""
+    assert is_never_translatable_tag("stuffCategories")
+    assert is_never_translatable_tag("associatedMemes")
+    assert is_never_translatable_tag("styles")
+    assert is_never_translatable_tag("altitudeLayer")
+
+
+def test_slash_path_with_hyphens_is_not_translatable() -> None:
+    """Найдено на: celetech_shuttle_extension (Patches: runtimeSystemKey) —
+    служебный ключ с дефисами и слэшем не проходил старую проверку пути."""
+    assert not is_translatable_value("celetech.shuttle.extension.integrations/bhlite-hygiene-runtime")
+    assert is_translatable_value("wall/floor paint")  # текст со слэшем и пробелом
+
+
+def test_single_word_with_underscore_is_not_translatable() -> None:
+    """Найдено на: cables_and_plumbing (Patches): "Med_Cables" — однословный
+    идентификатор с подчёркиванием; PascalCase-проверка его не ловила
+    (isalnum() False из-за "_")."""
+    assert not is_translatable_value("Med_Cables")
+    assert not is_translatable_value("CT_Shuttle_CE_Projectile_6mmAP")
+    assert is_translatable_value("heavy_duty pipe segment")  # есть пробел — текст
+
+
 def test_ordinary_capitalized_single_word_is_translatable_value() -> None:
     assert is_translatable_value("Cockpit")
     assert is_translatable_value("Wall")

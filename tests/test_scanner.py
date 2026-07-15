@@ -191,3 +191,119 @@ def test_load_folders_xml_scans_if_mod_active_paths(tmp_path: Path) -> None:
     keys = sorted(e.key for task in result.def_injected for e in task.data.keyed_items())
     assert keys == ["OptionalThing.description", "OptionalThing.label",
                      "TestThing.description", "TestThing.label"]
+
+
+def test_languages_dir_from_old_version_folder_is_ignored(tmp_path: Path) -> None:
+    """Мод хранит версионные копии Languages (1.4/Languages и 1.6/Languages) —
+    раньше брался просто первый результат glob("**/Languages"), а алфавитный
+    порядок обхода отдавал СТАРУЮ версию ("1.4" < "1.6"), и переводились
+    устаревшие строки. Выбор Languages должен быть согласован с
+    _resolve_content_roots (те же правила, что для Defs)."""
+    old_keyed = _KEYED_XML.replace("Some keyed string", "Old stale string")
+    _write(tmp_path / "1.4" / "Languages" / "English" / "Keyed" / "Test.xml", old_keyed)
+    _write(tmp_path / "1.6" / "Languages" / "English" / "Keyed" / "Test.xml", _KEYED_XML)
+
+    result = scanner.scan_mod(tmp_path)
+
+    assert result.source_lang_dir == "English"
+    assert len(result.keyed) == 1
+    texts = [e.text for e in result.keyed[0].data.keyed_items()]
+    assert texts == ["Some keyed string"]
+
+
+def test_root_languages_dir_preferred_over_versioned_copy(tmp_path: Path) -> None:
+    """Если Languages есть и в корне мода, и в актуальной версионной папке,
+    берётся наименее вложенная (корневая) — детерминированно, а не в
+    зависимости от порядка обхода файловой системы."""
+    _write(tmp_path / "Languages" / "English" / "Keyed" / "Test.xml", _KEYED_XML)
+    _write(tmp_path / "1.6" / "Languages" / "English" / "Keyed" / "Test.xml",
+           _KEYED_XML.replace("Some keyed string", "Versioned copy"))
+
+    result = scanner.scan_mod(tmp_path)
+
+    texts = [e.text for task in result.keyed for e in task.data.keyed_items()]
+    assert texts == ["Some keyed string"]
+
+
+def test_parentname_inheritance_across_files(tmp_path: Path) -> None:
+    """Родитель и наследник в РАЗНЫХ Defs-файлах (обычное устройство крупных
+    модов: базовые шаблоны в отдельном файле). Registry наследования должен
+    строиться по всем файлам мода сразу, иначе текст из родителя терялся."""
+    _write(tmp_path / "Defs" / "Bases.xml", """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <ThingDef Name="TestBase" Abstract="True">
+    <description>Shared base description.</description>
+  </ThingDef>
+</Defs>
+""")
+    _write(tmp_path / "Defs" / "Things.xml", """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <ThingDef ParentName="TestBase">
+    <defName>ConcreteThing</defName>
+    <label>concrete thing</label>
+  </ThingDef>
+</Defs>
+""")
+
+    result = scanner.scan_mod(tmp_path)
+
+    by_key = {e.key: e.text
+              for task in result.def_injected for e in task.data.keyed_items()}
+    assert by_key == {
+        "ConcreteThing.label": "concrete thing",
+        "ConcreteThing.description": "Shared base description.",
+    }
+
+
+def test_patch_overrides_defs_text_and_adds_foreign_keys(tmp_path: Path) -> None:
+    """Patches/*.xml: PatchOperationReplace поверх собственного Defs мода
+    должен победить текст из Defs (игра применяет патчи поверх), а патч на
+    ЧУЖОЙ def (из игры/другого мода) — добавить новый ключ. Раньше папка
+    Patches/ не сканировалась вообще."""
+    _write(tmp_path / "Defs" / "ThingDefs.xml", _DEFS_XML)
+    _write(tmp_path / "Patches" / "TestPatch.xml", """<?xml version="1.0" encoding="utf-8"?>
+<Patch>
+  <Operation Class="PatchOperationReplace">
+    <xpath>Defs/ThingDef[defName="TestThing"]/description</xpath>
+    <value>
+      <description>Patched description.</description>
+    </value>
+  </Operation>
+  <Operation Class="PatchOperationAdd">
+    <xpath>Defs/ThingDef[defName="VanillaWall"]</xpath>
+    <value>
+      <description>New description for a vanilla thing.</description>
+    </value>
+  </Operation>
+</Patch>
+""")
+
+    result = scanner.scan_mod(tmp_path)
+
+    by_key = {e.key: e.text
+              for task in result.def_injected for e in task.data.keyed_items()}
+    assert by_key["TestThing.description"] == "Patched description."
+    assert by_key["VanillaWall.description"] == "New description for a vanilla thing."
+    assert by_key["TestThing.label"] == "test thing"
+
+
+def test_strings_txt_files_are_scanned(tmp_path: Path) -> None:
+    """Languages/English/Strings/*.txt (списки слов для генераторов имён):
+    содержательные строки должны попадать в перевод, комментарии и пустые
+    строки — сохраняться как непереводимые. Раньше канал не сканировался."""
+    _write(tmp_path / "Languages" / "English" / "Keyed" / "Test.xml", _KEYED_XML)
+    _write(tmp_path / "Languages" / "English" / "Strings" / "Names" / "Ships.txt",
+           "// ship names\nDauntless\nVenture\n\nStarlight\n")
+
+    result = scanner.scan_mod(tmp_path)
+
+    assert len(result.strings) == 1
+    task = result.strings[0]
+    assert task.rel_path.as_posix() == "Names/Ships.txt"
+    items = task.data.keyed_items()
+    assert [e.text for e in items] == ["Dauntless", "Venture", "Starlight"]
+    assert [e.key for e in items] == [
+        "Strings/Names/Ships.txt:1",
+        "Strings/Names/Ships.txt:2",
+        "Strings/Names/Ships.txt:4",
+    ]

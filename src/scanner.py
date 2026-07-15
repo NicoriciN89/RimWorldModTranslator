@@ -1,13 +1,15 @@
-"""Обход папки мода: находит исходные строки для перевода либо в
-Languages/English/{Keyed,DefInjected}, либо (fallback) прямо в Defs/*.xml."""
+"""Обход папки мода: находит исходные строки для перевода в
+Languages/English/{Keyed,DefInjected,Strings}, в Defs/*.xml (fallback и
+дополнение, с разрешением наследования Name/ParentName) и в Patches/*.xml
+(текст, внедряемый в чужие def-ы через PatchOperation*)."""
 from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import xml_io
+from . import patches, xml_io
 
 _VERSION_TAG_RE = re.compile(r"^v?(\d+)\.(\d+)$", re.IGNORECASE)
 
@@ -26,15 +28,45 @@ class DefInjectedTask:
 
 
 @dataclass
+class StringsTask:
+    rel_path: Path          # относительный путь файла внутри Strings/
+    data: xml_io.LanguageDataFile
+
+
+@dataclass
 class ScanResult:
     source_lang_dir: str | None   # "English" если найден, иначе None (fallback-режим)
     keyed: list[KeyedTask]
     def_injected: list[DefInjectedTask]
+    strings: list[StringsTask] = field(default_factory=list)
 
 
 def _find_languages_dir(mod_root: Path) -> Path | None:
-    candidates = list(mod_root.glob("**/Languages"))
-    return candidates[0] if candidates else None
+    """Находит папку Languages согласованно с _resolve_content_roots:
+    кандидаты внутри версионных папок (1.0/, 1.1/, ...), которые игра для
+    новейшей поддерживаемой версии не грузит, отбрасываются. Раньше брался
+    просто первый результат glob("**/Languages") — у мода с копиями
+    1.4/Languages и 1.6/Languages алфавитный порядок обхода возвращал
+    СТАРУЮ версию ("1.4" < "1.6"), и переводились устаревшие строки."""
+    allowed_roots = {r.resolve() for r in _resolve_content_roots(mod_root)}
+
+    def in_excluded_version_dir(candidate: Path) -> bool:
+        prefix = mod_root
+        for part in candidate.relative_to(mod_root).parts[:-1]:
+            prefix = prefix / part
+            if _VERSION_TAG_RE.match(part) and prefix.resolve() not in allowed_roots:
+                return True
+        return False
+
+    candidates = [
+        c for c in mod_root.glob("**/Languages")
+        if c.is_dir() and not in_excluded_version_dir(c)
+    ]
+    if not candidates:
+        return None
+    # Из оставшихся берём наименее вложенную (обычно кандидат один);
+    # сортировка по строке — лишь для детерминизма при равной глубине.
+    return min(candidates, key=lambda c: (len(c.parts), str(c)))
 
 
 def _find_load_folders_xml(mod_root: Path) -> Path | None:
@@ -101,66 +133,134 @@ def _resolve_content_roots(mod_root: Path) -> list[Path]:
     return [mod_root]
 
 
-def _scan_defs_fallback(mod_root: Path) -> list[DefInjectedTask]:
-    """Извлекает переводимые поля прямо из Defs/*.xml, сгруппированные по
-    (DefType, имя файла) — так же, как их раскладывает по папкам DefInjected.
-    Сканирует только папки, которые реально грузятся игрой (см.
-    _resolve_content_roots), чтобы не дублировать перевод одного и того же
-    контента из старых версионных копий мода."""
-    # _resolve_content_roots уже перечисляет все нужные корни явно (включая
-    # опциональные подпапки конкретных под-модов) — берём Defs только прямо
-    # под каждым из них, БЕЗ рекурсивного "**/Defs". Рекурсивный поиск отсюда
-    # был бы не только избыточен, но и опасен: он бы затягивал Defs из
-    # вложенных путей, которые _resolve_content_roots специально исключил
-    # (напр. опциональные Mods/<X> с IfModActive, для которых нет данных об
-    # установленных у пользователя модах).
-    # Разные content root всё ещё могут указывать на одну и ту же папку
-    # (напр. mod_root и mod_root/1.6, если версионных подпапок нет вовсе) —
-    # дедуплицируем по разрешённому абсолютному пути.
-    seen_defs_dirs: dict[Path, Path] = {}
+def _content_subdirs(mod_root: Path, subdir_name: str) -> list[Path]:
+    """Все существующие папки <content_root>/<subdir_name> по реально
+    загружаемым корням (см. _resolve_content_roots), дедуплицированные по
+    разрешённому абсолютному пути: разные content root могут указывать на
+    одну и ту же физическую папку (напр. mod_root и mod_root/1.6).
+
+    Берём подпапку только ПРЯМО под каждым корнем, БЕЗ рекурсивного
+    "**/<subdir>" — рекурсивный поиск затягивал бы контент из вложенных
+    путей, которые _resolve_content_roots специально исключил."""
+    seen: dict[Path, Path] = {}
     for content_root in _resolve_content_roots(mod_root):
-        defs_dir = content_root / "Defs"
-        if defs_dir.is_dir():
-            seen_defs_dirs.setdefault(defs_dir.resolve(), defs_dir)
-    defs_dirs = list(seen_defs_dirs.values())
+        candidate = content_root / subdir_name
+        if candidate.is_dir():
+            seen.setdefault(candidate.resolve(), candidate)
+    return list(seen.values())
 
-    grouped: dict[tuple[str, str], list[xml_io.DefFieldRef]] = {}
-    for defs_dir in defs_dirs:
-        for xml_file in defs_dir.rglob("*.xml"):
-            refs = xml_io.extract_translatable_from_defs(xml_file)
-            if not refs:
-                continue
-            def_type = refs[0].def_type
-            grouped.setdefault((def_type, xml_file.stem), []).extend(refs)
 
+def _def_refs_by_file(mod_root: Path) -> list[tuple[Path, list[xml_io.DefFieldRef]]]:
+    """Извлекает переводимые поля из всех Defs/*.xml мода, файл за файлом,
+    с разрешением наследования Name/ParentName ПО ВСЕМ файлам сразу —
+    родитель и наследник часто лежат в разных файлах, и текст, заданный
+    только в абстрактном родителе, без этого терялся для наследников."""
+    files_roots: list[tuple[Path, ET.Element]] = []
+    for defs_dir in _content_subdirs(mod_root, "Defs"):
+        for xml_file in sorted(defs_dir.rglob("*.xml")):
+            root = xml_io.parse_defs_root(xml_file)
+            if root is not None:
+                files_roots.append((xml_file, root))
+
+    registry = xml_io.build_inheritance_registry(root for _, root in files_roots)
+    result: list[tuple[Path, list[xml_io.DefFieldRef]]] = []
+    for xml_file, root in files_roots:
+        refs = xml_io.extract_from_defs_root(root, registry)
+        if refs:
+            result.append((xml_file, refs))
+    return result
+
+
+def _ref_key(ref: xml_io.DefFieldRef) -> str:
+    return f"{ref.def_name}.{ref.field_path}" if ref.field_path else ref.def_name
+
+
+def _tasks_from_refs(refs_by_stem: dict[tuple[str, str], list[xml_io.DefFieldRef]]) -> list[DefInjectedTask]:
     result: list[DefInjectedTask] = []
-    for (def_type, file_stem), refs in grouped.items():
+    for (def_type, file_stem), refs in refs_by_stem.items():
         data = xml_io.LanguageDataFile()
         for ref in refs:
-            key = f"{ref.def_name}.{ref.field_path}" if ref.field_path else ref.def_name
-            data.entries.append(xml_io.Entry(key=key, text=ref.text))
+            data.entries.append(xml_io.Entry(key=_ref_key(ref), text=ref.text))
         result.append(DefInjectedTask(def_type=def_type, rel_path=Path(f"{file_stem}.xml"), data=data))
     return result
 
 
-def _current_defs_text_by_key(mod_root: Path) -> dict[str, str]:
-    """Плоский словарь {defName.field_path: актуальный английский текст},
-    извлечённый прямо из Defs/*.xml (не из DefInjected) — используется, чтобы
-    заметить случаи, когда автор мода обновил текст в Defs, но забыл
-    синхронизировать Languages/English/DefInjected (см. scan_mod)."""
-    seen_defs_dirs: dict[Path, Path] = {}
-    for content_root in _resolve_content_roots(mod_root):
-        defs_dir = content_root / "Defs"
-        if defs_dir.is_dir():
-            seen_defs_dirs.setdefault(defs_dir.resolve(), defs_dir)
+def _scan_defs_fallback(defs_refs: list[tuple[Path, list[xml_io.DefFieldRef]]]) -> list[DefInjectedTask]:
+    """Раскладывает уже извлечённые поля (см. _def_refs_by_file) по задачам,
+    сгруппированным по (DefType, имя файла) — так же, как их раскладывает по
+    папкам DefInjected. Группировка по def_type КАЖДОЙ ссылки, а не первой в
+    файле: один Defs-файл может смешивать несколько типов def-ов."""
+    grouped: dict[tuple[str, str], list[xml_io.DefFieldRef]] = {}
+    for xml_file, refs in defs_refs:
+        for ref in refs:
+            grouped.setdefault((ref.def_type, xml_file.stem), []).append(ref)
+    return _tasks_from_refs(grouped)
 
-    result: dict[str, str] = {}
-    for defs_dir in seen_defs_dirs.values():
-        for xml_file in defs_dir.rglob("*.xml"):
-            for ref in xml_io.extract_translatable_from_defs(xml_file):
-                key = f"{ref.def_name}.{ref.field_path}" if ref.field_path else ref.def_name
-                result[key] = ref.text
+
+def _current_defs_text_by_key(defs_refs: list[tuple[Path, list[xml_io.DefFieldRef]]]) -> dict[str, str]:
+    """Плоский словарь {defName.field_path: актуальный английский текст} из
+    Defs/*.xml (не из DefInjected) — используется, чтобы заметить случаи,
+    когда автор мода обновил текст в Defs, но забыл синхронизировать
+    Languages/English/DefInjected (см. scan_mod)."""
+    return {_ref_key(ref): ref.text for _, refs in defs_refs for ref in refs}
+
+
+def _scan_strings(english_dir: Path) -> list[StringsTask]:
+    """Languages/English/Strings/*.txt — списки слов/имён для генераторов
+    (по одной записи на строку). Перевод — файл с тем же относительным путём
+    в папке целевого языка. Раньше этот канал не сканировался вовсе."""
+    strings_dir = english_dir / "Strings"
+    result: list[StringsTask] = []
+    if not strings_dir.is_dir():
+        return result
+    for txt_file in sorted(strings_dir.rglob("*.txt")):
+        rel = txt_file.relative_to(strings_dir)
+        data = xml_io.parse_strings_file(txt_file, key_prefix=f"Strings/{rel.as_posix()}")
+        if data.keyed_items():
+            result.append(StringsTask(rel_path=rel, data=data))
     return result
+
+
+def _apply_patches(mod_root: Path, def_injected: list[DefInjectedTask]) -> None:
+    """Вносит в результат сканирования текст из Patches/*.xml (см. patches.py).
+    Патчи применяются игрой ПОВЕРХ Defs, поэтому для уже найденных ключей
+    пропатченный текст побеждает; ключи чужих def-ов (патчи на игру/DLC/другие
+    моды) добавляются новыми задачами, сгруппированными по (DefType, имя
+    файла патча)."""
+    refs_by_stem: dict[str, list[xml_io.DefFieldRef]] = {}
+    for patches_dir in _content_subdirs(mod_root, "Patches"):
+        for xml_file in sorted(patches_dir.rglob("*.xml")):
+            refs = patches.extract_translatable_from_patch(xml_file)
+            if refs:
+                refs_by_stem.setdefault(xml_file.stem, []).extend(refs)
+    if not refs_by_stem:
+        return
+
+    # Последний патч по ключу побеждает — как при последовательном применении.
+    patched_by_key: dict[str, xml_io.DefFieldRef] = {
+        _ref_key(ref): ref
+        for refs in refs_by_stem.values()
+        for ref in refs
+    }
+
+    covered_keys: set[str] = set()
+    for task in def_injected:
+        for entry in task.data.keyed_items():
+            ref = patched_by_key.get(entry.key)
+            if ref is not None:
+                entry.text = ref.text
+                covered_keys.add(entry.key)
+
+    grouped: dict[tuple[str, str], list[xml_io.DefFieldRef]] = {}
+    seen_new_keys: set[str] = set()
+    for file_stem, refs in refs_by_stem.items():
+        for ref in refs:
+            key = _ref_key(ref)
+            if key in covered_keys or key in seen_new_keys:
+                continue
+            seen_new_keys.add(key)
+            grouped.setdefault((ref.def_type, file_stem), []).append(ref)
+    def_injected.extend(_tasks_from_refs(grouped))
 
 
 def scan_mod(mod_root: Path) -> ScanResult:
@@ -174,10 +274,14 @@ def scan_mod(mod_root: Path) -> ScanResult:
 
     keyed: list[KeyedTask] = []
     def_injected: list[DefInjectedTask] = []
+    strings: list[StringsTask] = []
+    defs_refs = _def_refs_by_file(mod_root)
 
     if english_dir is None:
         # Нет Languages/English вообще — извлекаем всё прямо из Defs/*.xml.
-        return ScanResult(source_lang_dir=None, keyed=keyed, def_injected=_scan_defs_fallback(mod_root))
+        def_injected = _scan_defs_fallback(defs_refs)
+        _apply_patches(mod_root, def_injected)
+        return ScanResult(source_lang_dir=None, keyed=keyed, def_injected=def_injected)
 
     keyed_dir = english_dir / "Keyed"
     if keyed_dir.is_dir():
@@ -204,7 +308,7 @@ def scan_mod(mod_root: Path) -> ScanResult:
     # DefInjected только для части DefType) — в этом случае строки label/
     # description/... в Defs/*.xml иначе молча терялись бы. Дополняем
     # fallback-сканированием только те DefType, которых нет в DefInjected.
-    for task in _scan_defs_fallback(mod_root):
+    for task in _scan_defs_fallback(defs_refs):
         if task.def_type not in covered_def_types:
             def_injected.append(task)
 
@@ -217,7 +321,7 @@ def scan_mod(mod_root: Path) -> ScanResult:
     # не совпадает с тем, что мод ожидает подставить) или откровенно
     # устаревший, не соответствующий игре перевод. Поэтому для каждого ключа,
     # где Defs и DefInjected расходятся, подставляем актуальный текст из Defs.
-    current_defs_text = _current_defs_text_by_key(mod_root)
+    current_defs_text = _current_defs_text_by_key(defs_refs)
     if current_defs_text:
         for task in def_injected:
             for entry in task.data.keyed_items():
@@ -225,4 +329,11 @@ def scan_mod(mod_root: Path) -> ScanResult:
                 if current is not None and current != entry.text:
                     entry.text = current
 
-    return ScanResult(source_lang_dir="English", keyed=keyed, def_injected=def_injected)
+    # Патчи применяются игрой поверх Defs — поэтому в самом конце, чтобы
+    # пропатченный текст победил и Defs, и устаревший DefInjected.
+    _apply_patches(mod_root, def_injected)
+
+    strings = _scan_strings(english_dir)
+
+    return ScanResult(source_lang_dir="English", keyed=keyed,
+                      def_injected=def_injected, strings=strings)

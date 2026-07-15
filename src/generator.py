@@ -1,11 +1,12 @@
-"""Сборка выходного мода-русификатора: Languages/<Lang>/{Keyed,DefInjected}
-плюс About/About.xml, зависящий от оригинального мода."""
+"""Сборка выходного мода-русификатора: Languages/<Lang>/{Keyed,DefInjected,
+Strings} плюс About/About.xml, зависящий от оригинального мода."""
 from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
+from xml.sax.saxutils import escape as _xml_escape
 
 from . import xml_io
 from .scanner import ScanResult
@@ -58,15 +59,19 @@ def read_original_about(mod_root: Path) -> OriginalModInfo:
 def write_about_xml(out_root: Path, original: OriginalModInfo, lang_code: str,
                      translator_tag: str = "AutoTranslator") -> None:
     lang_dir = rimworld_lang_dir_name(lang_code)
-    mod_name = original.name or "Unknown Mod"
-    orig_package_id = original.package_id or "unknown.mod"
+    # Все значения из чужого About.xml экранируются: имя мода вида
+    # "Cats & Dogs" без экранирования давало невалидный XML, и RimWorld
+    # молча не загружал мод-русификатор.
+    mod_name = _xml_escape(original.name or "Unknown Mod")
+    orig_package_id = _xml_escape(original.package_id or "unknown.mod")
     new_package_id = f"{orig_package_id}.{lang_code.upper()}.Translation"
 
-    versions_xml = "\n".join(f"    <li>{v}</li>" for v in original.supported_versions) or "    <li>1.6</li>"
+    versions_xml = "\n".join(f"    <li>{_xml_escape(v)}</li>"
+                             for v in original.supported_versions) or "    <li>1.6</li>"
 
     dep_extra = ""
     if original.steam_workshop_url:
-        dep_extra = f"\n      <steamWorkshopUrl>{original.steam_workshop_url}</steamWorkshopUrl>"
+        dep_extra = f"\n      <steamWorkshopUrl>{_xml_escape(original.steam_workshop_url)}</steamWorkshopUrl>"
 
     content = f"""<?xml version="1.0" encoding="utf-8"?>
 <ModMetaData>
@@ -107,3 +112,7 @@ def write_translated_mod(out_root: Path, scan: ScanResult, lang_code: str,
     for task in scan.def_injected:
         out_path = lang_root / "DefInjected" / task.def_type / task.rel_path
         xml_io.write_language_data(out_path, task.data, with_original_comments)
+
+    for task in scan.strings:
+        out_path = lang_root / "Strings" / task.rel_path
+        xml_io.write_strings_file(out_path, task.data)

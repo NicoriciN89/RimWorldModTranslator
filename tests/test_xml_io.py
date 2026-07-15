@@ -6,8 +6,12 @@
 принимались за текст."""
 from __future__ import annotations
 
-from src.xml_io import extract_translatable_from_defs
+import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from src.xml_io import (
+    Entry, LanguageDataFile, extract_translatable_from_defs, write_language_data,
+)
 
 
 def _extract(tmp_path: Path, xml: str):
@@ -239,3 +243,114 @@ def test_numeric_and_boolean_values_are_not_translatable(tmp_path: Path) -> None
 """)
     texts = {r.text for r in refs}
     assert texts == {"test thing"}
+
+
+def test_label_from_abstract_parent_is_inherited(tmp_path: Path) -> None:
+    """RimWorld позволяет выносить label/description в абстрактного родителя
+    (<ThingDef Name="ABase" Abstract="True">), а наследник получает их через
+    ParentName. Игра переводит уже РАЗРЕШЁННЫЙ def — текст из родителя нужен
+    под ключом каждого наследника; раньше он терялся, а сам абстрактный
+    родитель (без defName) вообще не сканировался."""
+    refs = _extract(tmp_path, """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <ThingDef Name="TestBase" Abstract="True">
+    <label>base label</label>
+    <description>Base description.</description>
+  </ThingDef>
+  <ThingDef ParentName="TestBase">
+    <defName>ConcreteThing</defName>
+    <label>concrete label</label>
+  </ThingDef>
+</Defs>
+""")
+    by_key = {f"{r.def_name}.{r.field_path}": r.text for r in refs}
+    # label переопределён наследником, description унаследован от родителя.
+    assert by_key == {
+        "ConcreteThing.label": "concrete label",
+        "ConcreteThing.description": "Base description.",
+    }
+
+
+def test_inheritance_chain_through_grandparent(tmp_path: Path) -> None:
+    """Цепочка ParentName из нескольких звеньев: поле, заданное только у
+    прародителя, доходит до конкретного def-а."""
+    refs = _extract(tmp_path, """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <ThingDef Name="GrandBase" Abstract="True">
+    <description>Grandparent description.</description>
+  </ThingDef>
+  <ThingDef Name="MidBase" ParentName="GrandBase" Abstract="True">
+    <label>mid label</label>
+  </ThingDef>
+  <ThingDef ParentName="MidBase">
+    <defName>LeafThing</defName>
+  </ThingDef>
+</Defs>
+""")
+    by_key = {f"{r.def_name}.{r.field_path}": r.text for r in refs}
+    assert by_key == {
+        "LeafThing.label": "mid label",
+        "LeafThing.description": "Grandparent description.",
+    }
+
+
+def test_inherited_li_lists_keep_parent_items_first(tmp_path: Path) -> None:
+    """li-списки при наследовании объединяются: родительские элементы идут
+    ПЕРВЫМИ — от этого зависят числовые индексы в DefInjected-ключах."""
+    refs = _extract(tmp_path, """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <RulePackDef Name="RulesBase" Abstract="True">
+    <rulePack>
+      <rulesStrings>
+        <li>greet->Hello there.</li>
+      </rulesStrings>
+    </rulePack>
+  </RulePackDef>
+  <RulePackDef ParentName="RulesBase">
+    <defName>ConcreteRules</defName>
+    <rulePack>
+      <rulesStrings>
+        <li>bye->Farewell, friend.</li>
+      </rulesStrings>
+    </rulePack>
+  </RulePackDef>
+</Defs>
+""")
+    by_key = {f"{r.def_name}.{r.field_path}": r.text for r in refs}
+    assert by_key == {
+        "ConcreteRules.rulePack.rulesStrings.0": "greet->Hello there.",
+        "ConcreteRules.rulePack.rulesStrings.1": "bye->Farewell, friend.",
+    }
+
+
+def test_comment_with_double_hyphen_produces_valid_xml(tmp_path: Path) -> None:
+    """Спецификация XML запрещает "--" внутри комментария целиком (не только
+    "-->") и "-" в самом конце — исходный комментарий вида "some -- note"
+    раньше записывался как есть и делал весь выходной файл невалидным
+    (RimWorld молча не загружал его)."""
+    data = LanguageDataFile()
+    data.entries.append(Entry(key="", text=" some -- note --- trailing-", is_comment=True))
+    data.entries.append(Entry(key="TestKey", text="Some value"))
+    out = tmp_path / "Out.xml"
+
+    write_language_data(out, data)
+
+    root = ET.fromstring(out.read_text(encoding="utf-8"))  # не должно упасть
+    assert root.findtext("TestKey") == "Some value"
+
+
+def test_en_comment_with_double_hyphen_produces_valid_xml(tmp_path: Path) -> None:
+    """То же для необязательного комментария <!--EN: ...--> с оригиналом:
+    раньше экранировалось только "-->", но "--" внутри комментария тоже
+    запрещён спецификацией."""
+    data = LanguageDataFile()
+    data.entries.append(Entry(key="TestKey", text="перевод",
+                              original_text="original -- with dashes -->"))
+    out = tmp_path / "Out.xml"
+
+    write_language_data(out, data, with_original_comments=True)
+
+    content = out.read_text(encoding="utf-8")
+    root = ET.fromstring(content)  # не должно упасть
+    assert root.findtext("TestKey") == "перевод"
+    assert "<!--EN: " in content
