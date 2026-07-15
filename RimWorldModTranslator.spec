@@ -10,12 +10,21 @@ tmp_ret = collect_all('ctranslate2')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('sentencepiece')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('stanza')
+tmp_ret = collect_all('minisbd')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 # Встроенный языковой пакет Argos (en->ru) — избавляет пользователя от
-# скачивания ~200 МБ при первом запуске (см. src/translator.py).
+# скачивания ~200 МБ при первом запуске (см. src/translator.py). Там же
+# лежит модель сегментации MiniSBD (bundled_packages/minisbd/en.onnx).
 datas += [('bundled_packages', 'bundled_packages')]
+
+# Заглушка stanza: argostranslate/sbd.py импортирует stanza безусловно, но
+# при ARGOS_CHUNK_TYPE=MINISBD (принудительно задаётся в src/translator.py)
+# она никогда не используется. Настоящая stanza тянет torch — ради одного
+# мёртвого импорта сборка была на ~470 МБ тяжелее (torch 366 + spacy 78 +
+# blis 22 + thinc 9). Заглушка кладётся папкой в _internal (он в sys.path
+# замороженного приложения), а настоящие пакеты вырезаются через excludes.
+datas += [('build_stubs/stanza', 'stanza')]
 
 
 a = Analysis(
@@ -27,7 +36,12 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # см. комментарий у заглушки stanza выше
+        'stanza', 'torch', 'torchgen', 'torchaudio', 'torchvision',
+        'spacy', 'spacy_legacy', 'spacy_loggers', 'thinc', 'blis',
+        'preshed', 'cymem', 'murmurhash', 'sympy', 'networkx',
+    ],
     noarchive=False,
     optimize=0,
 )

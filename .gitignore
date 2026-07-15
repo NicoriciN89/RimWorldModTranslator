@@ -13,4 +13,7 @@ translator.log
 # Взять из установленного Argos: скопировать папку translate-en_ru-* из
 # %LOCALAPPDATA%\argos-translate\packages (Windows) или
 # ~/.local/share/argos-translate/packages (Linux/Mac) сюда же.
-bundled_packages/
+# Исключение: модель сегментации MiniSBD (~188 КБ) хранится в git — без неё
+# собранный exe скачивал бы её из интернета при первом запуске.
+bundled_packages/*
+!bundled_packages/minisbd/

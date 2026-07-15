@@ -4,11 +4,20 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sys
 from functools import lru_cache
 from pathlib import Path
+
+# Сегментация предложений: MiniSBD (onnx-модель ~200 КБ) вместо Stanza —
+# качество для наших коротких игровых строк то же (длинные тексты мы и сами
+# режем, см. _SENTENCE_SPLIT_RE), а Stanza тянет за собой torch (~370 МБ в
+# собранном exe). Выбор должен попасть в argostranslate.settings ДО первого
+# импорта argostranslate (settings читает переменную при своём импорте);
+# явно заданная пользователем переменная окружения уважается.
+os.environ.setdefault("ARGOS_CHUNK_TYPE", "MINISBD")
 
 from .glossary import GlossaryContext
 from .rimworld_rules import TRANSLATION_PLACEHOLDER_RE as _PLACEHOLDER_RE
@@ -22,6 +31,29 @@ log = get_logger("translator")
 # иероглифы вместо перевода). У кириллицы и CJK нет общих символов, так что
 # наличие CJK в результате при target_lang="ru" — надёжный признак порчи.
 _CJK_RE = re.compile(r"[一-鿿぀-ヿ가-힣]")
+
+# Найдено на: alpha_memes ("Ocular Warping ritual" рядом с глоссарным
+# токеном-заглушкой перед концом предложения). Модель иногда детерминированно
+# обрывает генерацию сразу после токена-заглушки глоссария (см. glossary.py),
+# теряя весь хвост предложения после термина — не порча в третий язык (CJK),
+# а именно преждевременная остановка генерации. Грубая эвристика: если
+# результат защищённого глоссарием перевода заметно короче (по числу слов),
+# чем перевод БЕЗ глоссарной защиты того же текста, это подозрительно похоже
+# на обрезание — откатываемся на перевод без глоссария для этого сегмента
+# (термин останется на английском, но лучше это, чем потерянный хвост фразы).
+_TRUNCATION_WORD_RATIO_THRESHOLD = 0.7
+
+# Найдено на: alpha_memes. Длинные многострочные описания (300+ символов,
+# несколько предложений/абзацев с rich-text разметкой вида <color=...>...
+# </color>) Argos иногда молча ОБРЕЗАЕТ в конце — NMT-модель генерирует
+# ограниченное число токенов на вход, и если оригинал длинный, хвост текста
+# (вплоть до закрывающего тега вроде </color>) просто теряется без всякой
+# ошибки. Разбиение на предложения перед переводом устраняет это: каждое
+# предложение короче лимита модели и переводится/склеивается по отдельности.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# Сегменты короче этого не разбиваем — короткие фразы и так не обрезаются,
+# а разбиение по предложениям только повредило бы согласование внутри фразы.
+_LONG_SEGMENT_THRESHOLD = 200
 
 
 _PACKAGE_INDEX_TIMEOUT_SECONDS = 30
@@ -78,6 +110,29 @@ def _install_bundled_package(source_lang: str, target_lang: str) -> bool:
     return False
 
 
+def _install_bundled_minisbd_models() -> None:
+    """Копирует встроенные onnx-модели сегментации предложений MiniSBD (en —
+    исходный язык почти всех модов) в кэш, откуда их читает argostranslate.
+    Без этого первый запуск скачивал бы модель из интернета (~200 КБ) — мелочь,
+    но ломает обещание полностью офлайн-перевода."""
+    import argostranslate.settings as settings
+
+    root = _bundled_packages_root()
+    if root is None:
+        return
+    src_dir = root / "minisbd"
+    if not src_dir.is_dir():
+        return
+    dest_dir = Path(settings.data_dir) / "minisbd"
+    for model in src_dir.glob("*.onnx"):
+        dest = dest_dir / model.name
+        if dest.is_file():
+            continue
+        log.info("Устанавливаю встроенную модель сегментации MiniSBD: %s", model.name)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(model, dest)
+
+
 class ArgosPackageSetupError(RuntimeError):
     """Не удалось подготовить языковой пакет Argos (сеть недоступна/заблокирована,
     таймаут скачивания и т.п.) — отдельный тип, чтобы GUI/CLI могли показать
@@ -104,6 +159,8 @@ class TranslationEngine:
             return
         import argostranslate.package as package
         import argostranslate.translate as translate
+
+        _install_bundled_minisbd_models()
 
         installed = translate.get_installed_languages()
         from_lang = next((l for l in installed if l.code == self.source_lang), None)
@@ -179,11 +236,48 @@ class TranslationEngine:
     def _translate_raw(self, text: str) -> str:
         return self._translation.translate(text)
 
+    def _translate_short(self, stripped: str, use_glossary: bool) -> str:
+        """Переводит один короткий (гарантированно не обрезаемый моделью по
+        длине) кусок текста — с защитой глоссария, повторной попыткой при
+        порче в случайный третий язык, и откатом на перевод без глоссария
+        при подозрении на обрезание из-за токена-заглушки (см. комментарий
+        у _TRUNCATION_WORD_RATIO_THRESHOLD)."""
+        with_glossary = use_glossary and self.target_lang == "ru"
+
+        def run_with_glossary() -> str:
+            ctx = GlossaryContext()
+            return ctx.restore(self._translate_raw(ctx.protect(stripped)))
+
+        if not with_glossary:
+            return self._translate_raw(stripped)
+
+        translated = run_with_glossary()
+        if self.target_lang == "ru" and _CJK_RE.search(translated):
+            # Похоже на порчу перевода (случайный третий язык вместо
+            # русского) — одна повторная попытка обычно даёт нормальный
+            # результат, так как Argos не детерминирован по батчам.
+            retry = run_with_glossary()
+            if not _CJK_RE.search(retry):
+                translated = retry
+
+        source_words = len(stripped.split())
+        translated_words = len(translated.split())
+        if source_words >= 4 and translated_words < source_words * _TRUNCATION_WORD_RATIO_THRESHOLD:
+            without_glossary = self._translate_raw(stripped)
+            if len(without_glossary.split()) > translated_words:
+                translated = without_glossary
+        return translated
+
     def _translate_segment(self, part: str, use_glossary: bool) -> str:
         """Переводит один сегмент, сохраняя его ведущие/замыкающие пробелы
         буквально — модель обычно их обрезает при переводе. Игровые термины
         RimWorld (см. glossary.py) защищаются от Argos и подставляются как
-        устоявшийся русский вариант уже после машинного перевода."""
+        устоявшийся русский вариант уже после машинного перевода.
+
+        Длинные сегменты (см. _LONG_SEGMENT_THRESHOLD) режутся на отдельные
+        предложения и переводятся по одному — иначе NMT-модель может молча
+        обрезать хвост длинного текста, теряя конец предложения или
+        закрывающий rich-text тег вроде </color> (см. _SENTENCE_SPLIT_RE)."""
         if not part:
             return part
         stripped = part.strip()
@@ -191,22 +285,12 @@ class TranslationEngine:
             return part
         lead = part[:len(part) - len(part.lstrip())]
         trail = part[len(part.rstrip()):]
-        with_glossary = use_glossary and self.target_lang == "ru"
 
-        def run_once() -> str:
-            if with_glossary:
-                ctx = GlossaryContext()
-                return ctx.restore(self._translate_raw(ctx.protect(stripped)))
-            return self._translate_raw(stripped)
-
-        translated = run_once()
-        if self.target_lang == "ru" and _CJK_RE.search(translated):
-            # Похоже на порчу перевода (случайный третий язык вместо
-            # русского) — одна повторная попытка обычно даёт нормальный
-            # результат, так как Argos не детерминирован по батчам.
-            retry = run_once()
-            if not _CJK_RE.search(retry):
-                translated = retry
+        if len(stripped) <= _LONG_SEGMENT_THRESHOLD:
+            translated = self._translate_short(stripped, use_glossary)
+        else:
+            sentences = _SENTENCE_SPLIT_RE.split(stripped)
+            translated = " ".join(self._translate_short(s, use_glossary) for s in sentences if s)
 
         return lead + translated + trail
 
