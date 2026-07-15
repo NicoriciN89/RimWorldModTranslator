@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-from . import generator, incremental, scanner
+from . import generator, incremental, overrides, scanner
 from .generator import rimworld_lang_dir_name
 from .llm_polish import (
     CHECK_BATCH_SIZE, DEFAULT_PARALLEL_REQUESTS, LANG_HUMAN_NAMES, LlmContext, LlmPolisher,
@@ -21,6 +21,12 @@ from .safe_print import safe_print
 from .translator import ArgosPackageSetupError, get_engine
 
 log = get_logger("main")
+
+
+class TranslationCancelled(RuntimeError):
+    """Пользователь остановил перевод (кнопка «Отмена» в GUI / Ctrl+C).
+    Частичный результат уже сброшен на диск, но кэш/снимок не сохраняются —
+    иначе режим обновления посчитал бы недопереведённые строки готовыми."""
 
 if sys.stdout is not None and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")
@@ -60,7 +66,14 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
                    llm_batch_size: int | None = None,
                    llm_parallel_requests: int = DEFAULT_PARALLEL_REQUESTS,
                    with_original_comments: bool = False,
-                   llm_mode: str = LLM_MODE_REWRITE) -> Path:
+                   llm_mode: str = LLM_MODE_REWRITE,
+                   memory: dict[str, str] | None = None,
+                   cancel_event: threading.Event | None = None) -> Path:
+    """memory — общая память переводов пакетного режима: {английский текст:
+    готовый перевод}. Заполняется по завершении каждого мода и позволяет
+    следующим модам очереди переиспользовать уже переведённые строки.
+    cancel_event — кооперативная отмена: при установке события перевод
+    останавливается с TranslationCancelled, частичный результат на диске."""
     if not src.is_dir():
         raise ValueError(f"Папка мода не найдена: {src}")
     if not use_argos and not use_llm:
@@ -72,15 +85,16 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
 
     on_progress(0, 0, f"[1/4] Сканирую мод: {src}")
     scan = scanner.scan_mod(src)
+    strings_note = f", Strings: {len(scan.strings)} файлов" if scan.strings else ""
     if scan.source_lang_dir:
         on_progress(0, 0, f"      Найден Languages/English — Keyed: {len(scan.keyed)} файлов, "
-                           f"DefInjected: {len(scan.def_injected)} файлов")
+                           f"DefInjected: {len(scan.def_injected)} файлов{strings_note}")
     else:
         on_progress(0, 0, f"      Languages/English отсутствует — извлекаю строки из Defs напрямую. "
                            f"Сгенерировано DefInjected-файлов: {len(scan.def_injected)}")
 
-    total_strings = sum(len(t.data.keyed_items()) for t in scan.keyed) + \
-        sum(len(t.data.keyed_items()) for t in scan.def_injected)
+    all_tasks = list(scan.keyed) + list(scan.def_injected) + list(scan.strings)
+    total_strings = sum(len(t.data.keyed_items()) for t in all_tasks)
     if total_strings == 0:
         raise ValueError("Переводимых строк не найдено — проверьте, что это папка мода RimWorld.")
 
@@ -90,7 +104,7 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
 
     all_entries = [
         entry
-        for task in list(scan.keyed) + list(scan.def_injected)
+        for task in all_tasks
         for entry in task.data.keyed_items()
     ]
     english_by_key = {entry.key: entry.text for entry in all_entries}
@@ -98,12 +112,39 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
         for entry in all_entries:
             entry.original_text = entry.text
 
+    # Ручные правки пользователя в файлах ПРОШЛОЙ генерации собираются до
+    # того, как мы что-либо перезапишем, и применяются после incremental —
+    # правка финальна и побеждает и машинный перевод, и переиспользованный.
+    overrides_map = overrides.harvest_manual_edits(out_root, lang_dir_name)
+
     reused_keys: set[str] = set()
     if update:
         reused_keys = incremental.apply_incremental(scan, out_root, lang_dir_name)
-        to_translate = total_strings - len(reused_keys)
-        on_progress(0, total_strings, f"[2/4] Режим обновления: {len(reused_keys)} строк без "
-                                       f"изменений (пропущены), {to_translate} новых/изменённых к переводу.")
+
+    override_keys = overrides.apply_overrides(scan, overrides_map)
+
+    memory_keys: set[str] = set()
+    if memory:
+        for entry in all_entries:
+            if entry.key in reused_keys or entry.key in override_keys:
+                continue
+            cached = memory.get(english_by_key[entry.key])
+            if cached is not None:
+                entry.text = cached
+                memory_keys.add(entry.key)
+
+    skipped_keys = reused_keys | override_keys | memory_keys
+    to_translate = total_strings - len(skipped_keys)
+    skip_notes = []
+    if reused_keys:
+        skip_notes.append(f"{len(reused_keys)} без изменений")
+    if override_keys:
+        skip_notes.append(f"{len(override_keys)} ручных правок (см. {overrides.OVERRIDES_FILENAME})")
+    if memory_keys:
+        skip_notes.append(f"{len(memory_keys)} из памяти переводов этой очереди")
+    if skip_notes:
+        on_progress(0, total_strings, f"[2/4] Пропущено: {', '.join(skip_notes)}; "
+                                       f"к переводу: {to_translate}.")
     else:
         on_progress(0, total_strings, f"[2/4] Всего строк к переводу: {total_strings}")
 
@@ -144,9 +185,9 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
 
     entries_to_translate = [
         entry
-        for task in list(scan.keyed) + list(scan.def_injected)
+        for task in all_tasks
         for entry in task.data.keyed_items()
-        if entry.key not in reused_keys
+        if entry.key not in skipped_keys
     ]
 
     original = generator.read_original_about(src)
@@ -158,13 +199,20 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
         with flush_lock:
             generator.write_translated_mod(out_root, scan, target_lang, with_original_comments)
 
-    done = len(reused_keys)
+    def check_cancel() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            flush_to_disk()
+            raise TranslationCancelled(
+                f"Перевод отменён. Частичный результат сохранён в {out_root}")
+
+    done = len(skipped_keys)
     on_progress(done, total_strings, "")
 
     if use_argos:
         pass_label = "[3a/4] Argos" if use_llm else "[3/4] Argos"
         on_progress(done, total_strings, f"{pass_label}: перевожу черновик для {len(entries_to_translate)} строк...")
         for entry in entries_to_translate:
+            check_cancel()
             log.debug("[Argos %d/%d] перевожу %s", done + 1, total_strings, entry.key)
             entry.text = engine.translate(entry.text)
             done += 1
@@ -172,7 +220,8 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
         flush_to_disk()
 
     if use_llm:
-        done = len(reused_keys)
+        check_cancel()
+        done = len(skipped_keys)
         is_check_mode = llm_mode == LLM_MODE_CHECK
         pass_label = "[3b/4] LLM" if use_argos else "[3/4] LLM"
         if is_check_mode:
@@ -202,19 +251,31 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
         if is_check_mode:
             polisher.check_and_fix_many(
                 items, batch_size=llm_batch_size, parallel_requests=llm_parallel_requests,
-                on_batch_done=on_batch_done,
+                on_batch_done=on_batch_done, cancel_event=cancel_event,
             )
         else:
             polisher.polish_many(
                 items, batch_size=llm_batch_size, parallel_requests=llm_parallel_requests,
-                on_batch_done=on_batch_done,
+                on_batch_done=on_batch_done, cancel_event=cancel_event,
             )
         flush_to_disk()
+        check_cancel()
+        # Прогресс LLM-прохода считался в done_box (обновляется из рабочих
+        # потоков) — без синхронизации сюда финальные сообщения ниже
+        # показывали бы счётчик, застывший на значении после Argos-прохода
+        # (а в режиме "только LLM" — вообще на числе переиспользованных строк).
+        done = done_box[0]
 
     on_progress(done, total_strings, f"[4/4] Дописываю мод-русификатор: {out_root}")
 
     flush_to_disk()
     incremental.save_cache(out_root, english_by_key)
+    # Снимок «что записала программа» — база для обнаружения ручных правок
+    # пользователя при следующей генерации (см. overrides.py). Сохраняется
+    # только при успешном завершении, как и кэш выше.
+    overrides.save_snapshot(out_root, {e.key: e.text for e in all_entries})
+    if memory is not None:
+        memory.update({english_by_key[e.key]: e.text for e in all_entries})
 
     on_progress(done, total_strings, f"Готово: {out_root}")
     return out_root
@@ -229,7 +290,9 @@ def _progress(done: int, total: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Локальный офлайн-переводчик модов RimWorld")
-    parser.add_argument("--src", required=True, type=Path, help="Путь к папке мода")
+    parser.add_argument("--src", required=True, type=Path, action="append",
+                         help="Путь к папке мода; можно указать несколько раз — моды "
+                              "переводятся по очереди с общей памятью переводов")
     parser.add_argument("--out", required=True, type=Path, help="Папка, куда собрать перевод")
     parser.add_argument("--source-lang", default="en", help="Код исходного языка (по умолчанию en)")
     parser.add_argument("--lang", required=True, help="Код целевого языка (ru, de, fr, ...)")
@@ -261,19 +324,24 @@ def main() -> None:
     log.info("=== CLI-запуск: %s ===", vars(args))
     safe_print(f"Лог: {log_path}", file=sys.stderr)
 
+    memory: dict[str, str] = {}
     try:
-        translate_mod(args.src.resolve(), args.out.resolve(), args.source_lang, args.lang,
-                       use_llm=args.llm, llm_model=args.llm_model,
-                       use_argos=not args.no_argos, update=args.update,
-                       llm_batch_size=args.llm_batch_size, llm_parallel_requests=args.llm_parallel,
-                       with_original_comments=args.with_original_comments, llm_mode=args.llm_mode)
-    except ValueError as e:
+        for i, src in enumerate(args.src, 1):
+            if len(args.src) > 1:
+                safe_print(f"=== Мод {i}/{len(args.src)}: {src.name} ===", file=sys.stderr)
+            translate_mod(src.resolve(), args.out.resolve(), args.source_lang, args.lang,
+                           use_llm=args.llm, llm_model=args.llm_model,
+                           use_argos=not args.no_argos, update=args.update,
+                           llm_batch_size=args.llm_batch_size, llm_parallel_requests=args.llm_parallel,
+                           with_original_comments=args.with_original_comments, llm_mode=args.llm_mode,
+                           memory=memory)
+    except (ValueError, TranslationCancelled) as e:
         log.error("Перевод прерван: %s", e)
         raise SystemExit(str(e))
     except Exception:
         log.exception("Необработанное исключение в CLI")
         raise
-    print()
+    safe_print()
 
 
 if __name__ == "__main__":
