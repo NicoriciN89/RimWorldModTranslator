@@ -1,17 +1,19 @@
 # RimWorld Mod Translator
 
-Локальный офлайн-переводчик модов RimWorld. Берёт папку мода, находит все
-переводимые строки (`Languages/English/Keyed`, `DefInjected` и `Strings/*.txt`,
-а если их нет — извлекает `label`/`description`/... прямо из `Defs/*.xml` с
-разрешением наследования `Name`/`ParentName`, плюс текст, внедряемый в чужие
-def-ы через `Patches/*.xml`), переводит их полностью офлайн через
-[Argos Translate](https://www.argosopentech.com/) и собирает готовый
-мод-русификатор с правильной структурой файлов и `About/About.xml`.
+A local, fully offline translator for RimWorld mods. Point it at a mod
+folder, and it finds every translatable string
+(`Languages/English/Keyed`, `DefInjected` and `Strings/*.txt`; if those
+don't exist, it extracts `label`/`description`/... directly from
+`Defs/*.xml` with `Name`/`ParentName` inheritance resolved, plus text
+injected into other mods' defs via `Patches/*.xml`), translates it fully
+offline through [Argos Translate](https://www.argosopentech.com/), and
+assembles a ready-to-use translation mod with the correct file structure
+and `About/About.xml`.
 
-Работает без интернета (кроме однократной загрузки языковой модели при первом
-запуске для новой пары языков) и без сторонних облачных API.
+Works without internet access (except for a one-time language model
+download on first use of a new language pair) and without any cloud API.
 
-## Установка
+## Installation
 
 ```powershell
 cd rimworld-mod-translator
@@ -20,17 +22,17 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Использование
+## Usage
 
-### Готовый .exe (не нужен Python)
+### Ready-made .exe (no Python needed)
 
-Собранный файл лежит в `dist/RimWorldModTranslator/RimWorldModTranslator.exe`
-— запустите его двойным кликом (не переносите отдельно от папки `_internal`
-рядом с ним, там все нужные библиотеки).
+The built file lives at `dist/RimWorldModTranslator/RimWorldModTranslator.exe`
+— double-click to run it (don't move it away from the `_internal` folder
+next to it, which holds all the required libraries).
 
-Если файла нет (не собирали ещё или удалили `dist/`), пересоберите через
-готовый `RimWorldModTranslator.spec` (directory-based сборка — antivirus-
-friendlier, чем `--onefile`, см. "Известные ограничения"):
+If the file isn't there (not built yet, or `dist/` was deleted), rebuild it
+with the included `RimWorldModTranslator.spec` (a directory-based build —
+more antivirus-friendly than `--onefile`, see "Known limitations"):
 
 ```powershell
 cd rimworld-mod-translator
@@ -39,298 +41,339 @@ pip install pyinstaller
 pyinstaller RimWorldModTranslator.spec --noconfirm
 ```
 
-Перед сборкой опционально положите готовый языковой пакет Argos `en->ru` в
-папку `bundled_packages/` в корне проекта (скопируйте папку вида
-`translate-en_ru-*` из `%LOCALAPPDATA%\argos-translate\packages` — она там
-появляется после первого использования пары en->ru) — тогда собранный .exe
-сможет переводить на русский сразу, без скачивания ~200 МБ через интернет
-при первом запуске у конечного пользователя (см. "LLM-доработка" ниже про
-похожую проблему с сетевыми зависаниями). Без этой папки сборка тоже
-работает — просто первый перевод на новый язык скачает нужный пакет сам.
+Before building, you can optionally drop a ready-made Argos `en->ru`
+language package into the `bundled_packages/` folder at the project root
+(copy the `translate-en_ru-*` folder from
+`%LOCALAPPDATA%\argos-translate\packages` — it appears there after the
+first use of the en->ru pair) — then the built .exe can translate to
+Russian right away, without downloading ~200 MB over the internet on the
+end user's first run (see "LLM polishing" below for a similar concern about
+network hangs). The build also works without this folder — the first
+translation into a new language will just download the package itself.
 
-Сборка занимает 20–35 минут (torch и ctranslate2 внутри Argos Translate —
-тяжёлые пакеты), итоговый размер — около 235 МБ без `bundled_packages`
-или около 450 МБ с ним.
+The build takes about a minute and produces a folder of roughly **370 MB**
+(sentence segmentation uses a small bundled [MiniSBD](https://github.com/LibreTranslate/MiniSBD)
+onnx model instead of Stanza, which used to drag the entire `torch` library
+into the package as a dead import).
 
-### Простое окно из исходников (для разработки)
+### Plain window from source (for development)
 
 ```powershell
 python -m src.gui
 ```
 
-Открывается окно: кнопкой "Обзор..." выбирается папка мода (та, где лежит
-`About/About.xml`), из выпадающего списка — язык перевода, кнопка "Перевести"
-запускает процесс с прогресс-баром. Больше ничего указывать не нужно — папка
-для сохранения результата предзаполнена (`./output`), но её тоже можно
-поменять через "Обзор...".
+Opens a window: the "Обзор..." (Browse) button picks the mod folder (the
+one containing `About/About.xml`), the dropdown picks the target language,
+and "Перевести" (Translate) starts the process with a progress bar.
+Nothing else is required — the output folder is pre-filled (`./output`),
+but can also be changed via "Обзор...".
 
-Дополнительно в окне можно выбрать:
-- **Движок перевода** — только Argos (быстро), только LLM (медленно,
-  качественнее), Argos + LLM-доработка (переписывает каждую строку) или
-  Argos + LLM-проверка ошибок (быстрее — см. раздел "Режим проверки ошибок"
-  ниже).
-- **Модель Ollama** — активна, если движок использует LLM; список
-  подтягивается автоматически из установленных в Ollama моделей (кнопка
-  "Обновить список", если поставили новую модель уже после запуска окна).
-- **Режим обновления** — см. раздел "Доперевод" ниже.
-- **Очередь модов** — пакетный режим: добавьте несколько папок модов кнопкой
-  "Добавить" и нажмите "Перевести" — моды обработаются по очереди с общей
-  памятью переводов (одинаковые строки переводятся один раз). Ошибка одного
-  мода не прерывает остальные. Если очередь пуста, переводится мод из поля
-  "Папка мода", как раньше.
-- **Кнопка "Отмена"** — останавливает запущенный перевод после текущей
-  строки/пачки; частично переведённый результат остаётся на диске, но кэш
-  доперевода не сохраняется (повторный запуск честно переведёт всё заново).
+The window additionally offers:
+- **Translation engine** — Argos only (fast), LLM only (slow, higher
+  quality), Argos + LLM polish (rewrites every line) or Argos + LLM error
+  check (faster — see "Error-check mode" below).
+- **Ollama model** — active when the engine uses an LLM; the list is
+  pulled automatically from models installed in Ollama ("Обновить список" /
+  Refresh list button if you installed a new model after opening the
+  window).
+- **Update mode** — see "Re-translating" below.
+- **Mod queue** — batch mode: add several mod folders with the "Добавить"
+  (Add) button and click "Перевести" (Translate) — the mods are processed
+  one after another with a shared translation memory (identical strings
+  are translated once). An error in one mod doesn't stop the rest. If the
+  queue is empty, the mod from the "Папка мода" field is translated as
+  usual.
+- **Cancel button** — stops a running translation after the current
+  string/batch; the partially translated result stays on disk, but the
+  incremental-update cache is not saved (a subsequent run will honestly
+  re-translate everything).
 
-Выбранные настройки (папки, язык, движок, модель, галочки) сохраняются между
-запусками в `%APPDATA%\RimWorldModTranslator\settings.json`.
+Your chosen settings (folders, language, engine, model, checkboxes) persist
+between runs in `%APPDATA%\RimWorldModTranslator\settings.json`.
 
-### Ручные правки перевода
+### Manual translation fixes
 
-Кривую строку можно исправить прямо в выходном XML/txt файле перевода. При
-следующей генерации программа сама заметит правку (сравнив файлы со снимком
-того, что писала она), сохранит её в `manual_overrides.json` рядом с
-переводом и с тех пор всегда будет подставлять ваш вариант — при любом
-движке и режиме. Чтобы отменить правку, удалите её строку из
-`manual_overrides.json`.
+You can fix an awkward string right in the output XML/txt translation
+file. On the next run, the program notices your edit by itself (by
+comparing the files against a snapshot of what it wrote), saves it into
+`manual_overrides.json` next to the translation, and from then on always
+uses your wording — regardless of engine or mode. To undo a fix, delete
+its line from `manual_overrides.json`.
 
-### Командная строка (для автоматизации/скриптов)
+### Command line (for automation/scripts)
 
 ```powershell
-python -m src.main --src "путь\к\папке\мода" --out ".\output" --lang ru
+python -m src.main --src "path\to\mod\folder" --out ".\output" --lang ru
 ```
 
-- `--src` — папка мода (та, где лежит `About/`); можно указать несколько раз —
-  моды переводятся по очереди с общей памятью переводов (пакетный режим).
-- `--out` — куда положить собранный мод-русификатор (будет создана подпапка
-  `<ИмяМода>_RU`).
-- `--lang` — код целевого языка (ISO 639-1: `ru`, `de`, `fr`, `es`, `uk`, ...).
-- `--source-lang` — код исходного языка, по умолчанию `en`.
-- `--llm` — дополнительно доработать черновик Argos локальной LLM через
-  [Ollama](https://ollama.com/) (см. раздел "LLM-доработка" ниже).
-- `--llm-model` — какую модель Ollama использовать для доработки (по
-  умолчанию `qwen2.5:7b`).
-- `--no-argos` — не использовать Argos Translate, переводить только через
-  LLM (требует `--llm`). Медленнее, но не тратит время на черновик, который
-  всё равно будет переписан.
-- `--update` — режим доперевода, см. раздел "Доперевод" ниже.
-- `--llm-mode` — режим работы LLM (см. раздел "Режим проверки ошибок" ниже):
-  `rewrite` (по умолчанию) переписывает каждую строку, `check` сначала
-  переводит весь мод через Argos на 100%, затем LLM только ищет и правит
-  ошибки в черновике.
-- `--with-original-comments` — добавлять перед каждой переведённой строкой
-  XML-комментарий `<!--EN: оригинальный текст-->`, чтобы можно было визуально
-  сверить перевод с оригиналом прямо в выходном файле, не открывая исходный
-  мод. Комментарий добавляется, только если перевод отличается от оригинала.
-  Никак не влияет на скорость перевода — это просто более удобный вывод.
+- `--src` — the mod folder (the one containing `About/`); can be given
+  multiple times — mods are translated one after another with a shared
+  translation memory (batch mode).
+- `--out` — where to put the assembled translation mod (a `<ModName>_RU`
+  subfolder is created).
+- `--lang` — target language code (ISO 639-1: `ru`, `de`, `fr`, `es`, `uk`, ...).
+- `--source-lang` — source language code, defaults to `en`.
+- `--llm` — additionally polish the Argos draft with a local LLM via
+  [Ollama](https://ollama.com/) (see "LLM polishing" below).
+- `--llm-model` — which Ollama model to use for polishing (default
+  `qwen2.5:7b`).
+- `--no-argos` — don't use Argos Translate, translate only through the LLM
+  (requires `--llm`). Slower, but doesn't waste time on a draft that will
+  be rewritten anyway.
+- `--update` — incremental re-translation mode, see "Re-translating" below.
+- `--llm-mode` — LLM operating mode (see "Error-check mode" below):
+  `rewrite` (default) rewrites every line, `check` first translates the
+  whole mod through Argos at 100%, then has the LLM only find and fix
+  errors in the draft.
+- `--with-original-comments` — add an XML comment `<!--EN: original
+  text-->` before each translated line, so you can visually compare the
+  translation with the original right in the output file without opening
+  the source mod. The comment is only added when the translation differs
+  from the original. Doesn't affect translation speed — it's just a more
+  convenient output format.
 
-При первом запуске для новой пары языков Argos Translate скачает и установит
-нужную языковую модель (после этого работает полностью офлайн).
+On the first run for a new language pair, Argos Translate will download
+and install the required language model (fully offline after that).
 
-## Доперевод (`--update`)
+## Re-translating / updating a mod (`--update`)
 
-Если в папке `--out` уже есть перевод этого мода (собранный этим же
-инструментом ранее), флаг `--update` переводит только новые или изменившиеся
-английские строки, а всё остальное берёт из существующего перевода как есть
-— в том числе ваши ручные правки, если вы их вносили прямо в переведённые
-XML-файлы.
+If the `--out` folder already contains a translation of this mod (built by
+this same tool earlier), the `--update` flag translates only new or
+changed English strings, taking everything else from the existing
+translation as-is — including any manual fixes you made directly in the
+translated XML files.
 
-Как это определяется: рядом с переводом хранится скрытый файл
-`.translation_cache.json` — снимок английских строк на момент последнего
-перевода, ключ в ключ. При `--update` инструмент сравнивает текущий
-английский текст мода с этим снимком:
-- текст не изменился и перевод уже есть → строка не трогается;
-- текст новый или изменился → строка переводится заново (тем движком,
-  который вы выбрали для этого запуска — можно, например, в первый раз
-  прогнать весь мод быстрым Argos, а потом `--update --llm` только для
-  новых строк после обновления мода).
+How this is detected: a hidden `.translation_cache.json` file is kept next
+to the translation — a snapshot of the English strings as of the last
+translation, key by key. With `--update`, the tool compares the mod's
+current English text against this snapshot:
+- text unchanged and a translation already exists → the string is left alone;
+- text is new or changed → the string is translated again (with whichever
+  engine you picked for this run — e.g. you can run the whole mod through
+  fast Argos the first time, then `--update --llm` only for the new
+  strings after a mod update).
 
-Без `--update` (по умолчанию) инструмент просто переводит весь мод заново
-и перезаписывает выходную папку целиком.
+Without `--update` (the default), the tool simply translates the whole mod
+from scratch and overwrites the output folder entirely.
 
-## LLM-доработка перевода (опционально, `--llm`)
+## LLM translation polishing (optional, `--llm`)
 
-Argos Translate не видит контекст мода и не согласует падежи/род при
-подстановке терминов из глоссария (`труба усиленный` вместо `усиленная
-труба`). Флаг `--llm` добавляет второй проход: локальная LLM через Ollama
-получает оригинал, черновик Argos и контекст строки (мод/поле) и пытается
-выдать грамматически более естественный вариант — тоже полностью офлайн,
-без внешних API.
+Argos Translate doesn't see the mod's context and doesn't adjust case/gender
+agreement when substituting glossary terms (`труба усиленный` instead of
+`усиленная труба`). The `--llm` flag adds a second pass: a local LLM via
+Ollama receives the original text, the Argos draft, and the string's
+context (mod/field), and attempts to produce a more grammatically natural
+version — also fully offline, no external APIs.
 
-При `--llm` вместе с Argos (без `--no-argos`) перевод идёт в два отдельных
-прохода, а не построчным чередованием: сначала Argos переводит черновик для
-всех строк мода (быстро), и только потом LLM дорабатывает все строки одну за
-другой. В логе/окне это видно как переход `[3a/4] Argos: ...` ->
-`[3b/4] LLM: ...` — так проще понять, на каком именно этапе сейчас находится
-долгий перевод.
+With `--llm` together with Argos (i.e. without `--no-argos`), translation
+runs as two separate passes rather than line-by-line interleaving: Argos
+first translates a draft for every string in the mod (fast), and only then
+does the LLM polish every string one by one. In the log/window this shows
+up as a transition from `[3a/4] Argos: ...` to `[3b/4] LLM: ...` — making
+it easier to tell which stage a long translation is currently in.
 
-**Установка** (один раз, требует интернет только на этом шаге):
-1. Скачать и установить [Ollama](https://ollama.com/download) (~1.4 ГБ).
-2. Скачать модель: `ollama pull qwen2.5:7b` (~4.7 ГБ).
+**Setup** (one-time, needs internet only for this step):
+1. Download and install [Ollama](https://ollama.com/download) (~1.4 GB).
+2. Download the model: `ollama pull qwen2.5:7b` (~4.7 GB).
 
-После этого Ollama работает локально как фоновый сервис на
-`http://localhost:11434` — никакого интернета для самого перевода не нужно.
-Если Ollama не установлена или не запущена, `--llm` тихо откатывается на
-обычный черновик Argos, ничего не ломая.
+After that, Ollama runs locally as a background service at
+`http://localhost:11434` — no internet is needed for the translation
+itself. If Ollama isn't installed or running, `--llm` silently falls back
+to the plain Argos draft without breaking anything.
 
-**Честная оценка качества** (протестировано на реальных строках из
+**Honest quality assessment** (tested on real strings from
 `cables_and_plumbing`):
 
-| Поле | Без `--llm` (Argos) | С `--llm` (Argos + qwen2.5:7b) |
+| Field | Without `--llm` (Argos) | With `--llm` (Argos + qwen2.5:7b) |
 |---|---|---|
-| `Med_PipeHeavyDuty.label` | труба усиленный | **усиленная труба** ✓ исправлено |
-| `Med_ElectricalWiring.description` | "Роллс света, тонкие..." | "Роллы светлых, тонких..." — грамматика лучше, но "роллы/роллс" всё ещё не то слово (должно быть "мотки") |
-| `Med_ElectricalCableCuprosteel.stuffAdjective` (Cuprosteel) | камуфляж | кварцевый — другая ошибка вместо старой, тоже неверно |
+| `Med_PipeHeavyDuty.label` | труба усиленный | **усиленная труба** ✓ fixed |
+| `Med_ElectricalWiring.description` | "Роллс света, тонкие..." | "Роллы светлых, тонких..." — grammar improved, but "роллы/роллс" is still the wrong word (should be "мотки"/coils) |
+| `Med_ElectricalCableCuprosteel.stuffAdjective` (Cuprosteel) | камуфляж | кварцевый — a different wrong guess, still incorrect |
 
-LLM надёжно улучшает согласование (падежи, порядок слов), но не является
-волшебной палочкой — редкие/составные слова (`Cuprosteel`) обе модели могут
-переврать. Для решающих смысловых ошибок нужна ручная вычитка.
+The LLM reliably improves agreement (cases, word order), but it's not a
+silver bullet — rare/compound words (`Cuprosteel`) can be mistranslated by
+either model. Decisive semantic errors still need a manual review.
 
-**Скорость** — это главная плата за качество, но с версии 1.0.7+ доработка
-не идёт по одной строке за раз:
+**Speed** is the main cost of the quality gain, but since v1.0.7+ polishing
+doesn't happen one line at a time:
 
-- **Пачки строк за один запрос** (`--llm-batch-size`, по умолчанию 12) — LLM
-  дорабатывает сразу 12 строк одним запросом вместо 12 отдельных, деля
-  накладные расходы Ollama (загрузка контекста и т.п.) на все строки пачки.
-- **Несколько пачек параллельно** (`--llm-parallel`, по умолчанию 2, можно
-  задать через переменную окружения `RMT_LLM_PARALLEL`) — Ollama умеет
-  обслуживать несколько генераций одновременно, если хватает CPU/RAM,
-  поэтому 2+ параллельных запроса ускоряют проход почти пропорционально
-  их числу. На слабом ПК стоит оставить 1–2, на мощном (8+ ядер, много RAM)
-  можно пробовать 3–4.
-- **Короткие однословные строки пропускают LLM вовсе** (`Shuttle`, `Wall` и
-  т.п. — там нечего согласовывать) и остаются как черновик Argos, экономя
-  время на них полностью.
-- **`num_predict` ограничен** длиной, пропорциональной размеру пачки — не
-  даёт модели «растекаться мыслью» и немного ускоряет генерацию.
+- **Batches of lines per request** (`--llm-batch-size`, default 12) — the
+  LLM polishes 12 lines at once in a single request instead of 12 separate
+  ones, spreading Ollama's overhead (context loading, etc.) across the
+  whole batch.
+- **Several batches in parallel** (`--llm-parallel`, default 2, can be set
+  via the `RMT_LLM_PARALLEL` environment variable) — Ollama can serve
+  several generations at once if CPU/RAM allow, so 2+ parallel requests
+  speed up the pass almost proportionally to their count. Keep it at 1–2 on
+  a weak PC; try 3–4 on a powerful one (8+ cores, plenty of RAM).
+- **Short single-word strings skip the LLM entirely** (`Shuttle`, `Wall`,
+  etc. — nothing to agree on there) and stay as the Argos draft, saving all
+  the time on them.
+- **`num_predict` is capped** at a length proportional to batch size — keeps
+  the model from rambling and slightly speeds up generation.
 
-Итоговое ускорение по сравнению с построчной обработкой — примерно в
-5–10 раз в типичных условиях (зависит от размера пачки, числа параллельных
-запросов и мощности ПК), но перевод через LLM всё равно на порядок медленнее
-чистого Argos. Используйте `--llm` для небольших/средних модов, выборочно
-для ключевых строк, или запускайте перевод большого мода в фоне — не как
-замену обычному быстрому режиму по умолчанию.
+Overall speedup compared to line-by-line processing is roughly 5–10x under
+typical conditions (depends on batch size, number of parallel requests, and
+PC performance), but LLM translation is still an order of magnitude slower
+than plain Argos. Use `--llm` for small/medium mods, selectively for key
+strings, or run a large mod's translation in the background — not as a
+replacement for the fast default mode.
 
-## Режим проверки ошибок (`--llm-mode check`)
+## Error-check mode (`--llm-mode check`)
 
-По умолчанию (`--llm-mode rewrite`) LLM переписывает КАЖДУЮ строку из
-пачки заново — даже если черновик Argos уже был грамматически верным.
-Это не только тратит время впустую на уже хорошие строки, но и создаёт
-небольшой риск, что модель «исправит» то, что и так было правильно, на
-другую формулировку.
+By default (`--llm-mode rewrite`), the LLM rewrites EVERY line in a batch
+from scratch — even if the Argos draft was already grammatically correct.
+This not only wastes time on already-good lines, but also carries a small
+risk that the model "fixes" something that was already fine into a
+different phrasing.
 
-Режим `--llm-mode check` (в GUI — движок "Argos + LLM-проверка ошибок")
-работает иначе:
+`--llm-mode check` (in the GUI: the "Argos + LLM-проверка ошибок" engine)
+works differently:
 
-1. Argos сначала переводит **весь** мод на 100% (как обычно).
-2. LLM получает большие пачки строк (по умолчанию 20, `--llm-batch-size`)
-   с задачей **не переписать, а найти ошибки**: несогласованные падеж/род,
-   нарушенный порядок слов, остаток непереведённого английского текста,
-   повреждённый плейсхолдер.
-3. Модель возвращает исправления **только для строк, где реально нашла
-   проблему** — остальные номера просто не упоминаются в ответе и
-   остаются черновиком Argos буквально без изменений.
+1. Argos first translates the **entire** mod at 100% (as usual).
+2. The LLM receives large batches of lines (default 20,
+   `--llm-batch-size`) with the task of **finding errors, not rewriting**:
+   wrong case/gender agreement, broken word order, leftover untranslated
+   English text, a damaged placeholder.
+3. The model returns fixes **only for lines where it actually found a
+   problem** — the rest are simply not mentioned in the response and stay
+   as the Argos draft, completely unchanged.
 
-Так как задача модели — только найти и исправить меньшинство строк, а не
-переписать всё, пачки можно брать крупнее (20 против 12 в обычном режиме)
-без потери точности, а сам ответ модели короче (меньше строк-исправлений,
-не текст на весь мод), что ускоряет прохождение больших модов — особенно
-если Argos и так справляется с большинством строк без серьёзных ошибок.
+Since the model's job is only to find and fix a minority of lines rather
+than rewrite everything, batches can be larger (20 vs. 12 in the regular
+mode) without losing accuracy, and the model's response itself is shorter
+(fewer fix-lines, not text for the whole mod), which speeds up large mods —
+especially when Argos already handles most lines without serious errors.
 
-Требует включённый Argos (без `--no-argos`) — режим `check` в принципе не
-имеет смысла без черновика, который нужно проверять.
+Requires Argos enabled (i.e. without `--no-argos`) — `check` mode
+inherently makes no sense without a draft to check against.
 
-## Как это работает
+## How it works
 
-- **`src/gui.py`** — окно на tkinter (входит в стандартную библиотеку Python,
-  ничего доп. ставить не нужно). Перевод идёт в отдельном потоке, чтобы окно
-  не зависало на время перевода.
-- **`src/scanner.py`** — обходит мод, ищет `Languages/English/{Keyed,DefInjected}`.
-  Если `DefInjected` нет (или он покрывает не все типы Def), недостающая часть
-  дополняется извлечением переводимых полей прямо из `Defs/*.xml`. При этом
-  сканируются только папки, которые реально грузит игра для новейшей
-  поддерживаемой версии: если у мода есть `LoadFolders.xml`, программа читает
-  его так же, как это делает сама RimWorld, и берёт только актуальные пути
-  (без веток, зависящих от `IfModActive` — нет данных об установленных модах
-  пользователя); если файла нет — определяет новейшую версию по названиям
-  папок (`1.0`, `1.1`, ...). Без этого моды, хранящие несколько версионных
-  копий `Defs` рядом, сканировались бы все разом, и один и тот же текст
-  переводился бы по нескольку раз впустую. Найденные папки `Defs`
-  дедуплицируются по фактическому пути на диске — это нужно, когда корень
-  мода и его же версионная подпапка (например, `1.6/`) оба попадают в набор
-  путей для сканирования и иначе пересекались бы.
-- **`src/rimworld_rules.py`** — база знаний о том, что в XML-модах RimWorld
-  является переводимым текстом, а что — техническими данными (идентификаторы
-  defName/class-ссылок, plaсеholder'ы `{0}`/`[founderName]`, enum-подобные
-  `moduleTypeID`/`installableSegmentTypes`, `ruleKey->текст` из грамматики
-  идеологий/квестов, HEX-цвета и пути к файлам). `xml_io.py` (что извлекать
-  из `Defs/*.xml`) и `translator.py` (что защищать от Argos/LLM при переводе)
-  используют эти правила, а не дублируют логику каждый у себя. Каждое правило
-  снабжено комментарием, на каком реальном моде оно найдено — при появлении
-  нового бага на новом моде стоит сначала проверить здесь, нет ли уже
-  подходящей категории, вместо ещё одного разрозненного regex по коду.
-- **`src/xml_io.py`** — чтение/запись `LanguageData` XML с сохранением порядка
-  ключей и XML-комментариев (разделы вида `<!-- CABLES -->`), с посимвольным
-  контролем экранирования и BOM, как в оригинальных модах.
-- **`src/translator.py`** — перевод через Argos Translate. Любые плейсхолдеры
-  (см. `rimworld_rules.TRANSLATION_PLACEHOLDER_RE`) никогда не отдаются модели
-  как текст — строка режется на сегменты по их границам, переводится только
-  текст между ними, плейсхолдеры возвращаются на место буквально (без этого
-  Argos иногда переводил и содержимое плейсхолдера, вплоть до случайного
-  третьего языка вместо целевого, либо портил grammar-токены идеологий типа
-  `[founder_pronoun]`, из-за чего RimWorld падала в лог с "Bad string pass").
-  По той же причине после каждого перевода сегмента результат проверяется на
-  присутствие CJK-символов (при целевом языке `ru` их там быть не должно);
-  если найдены — перевод автоматически повторяется один раз, что обычно даёт
-  нормальный результат.
-- **`src/glossary.py`** — глоссарий устоявшихся терминов RimWorld (хедифф,
-  психокаст, ксенотип, шаттл, ...), собранный из реальных переводов
-  сообщества. Термины защищаются от машинного перевода тем же способом, что
-  и плейсхолдеры, и после перевода Argos подставляется принятый в комьюнити
-  русский вариант.
-- **`src/generator.py`** — собирает выходной мод: `Languages/<Lang>/...` и
-  `About/About.xml` (с `packageId`/`modDependencies`/`loadAfter`, указывающими
-  на оригинальный мод — по образцу существующих в этой коллекции русификаторов).
-- **`src/llm_polish.py`** — опциональный второй проход через локальную LLM
-  (Ollama), см. раздел "LLM-доработка перевода" выше. Также умеет получать
-  список установленных в Ollama моделей для выбора в GUI/`--llm-model`.
-- **`src/incremental.py`** — доперевод: сравнивает текущие английские строки
-  со снимком из `.translation_cache.json` в папке вывода и решает, какие
-  ключи можно взять из уже существующего перевода без повторного перевода.
-- **`run_gui.py`** — точка входа для сборки в `.exe` через PyInstaller (см.
-  "Готовый .exe" выше).
-- **`src/safe_print.py`** — обёртка над `print()`, не падающая, если
-  `sys.stdout`/`sys.stderr` отсутствуют (так и есть у `.exe`, собранного с
-  `--windowed` — там нет консоли, и вывод в неё иначе крашит запуск).
-- **`src/log_setup.py`** — файловый лог `translator.log` рядом с exe (или
-  рядом с проектом при запуске из исходников): построчно фиксирует
-  сканирование, каждую переводимую строку и тайминги LLM-запросов к Ollama —
-  нужен, чтобы отличить реальное зависание от обычной медленной работы
-  LLM-доработки, и чтобы приложить к обращению за поддержкой.
+- **`src/gui.py`** — a tkinter window (part of Python's standard library,
+  nothing extra to install). Translation runs on a separate thread so the
+  window doesn't freeze during translation.
+- **`src/scanner.py`** — walks the mod, looking for
+  `Languages/English/{Keyed,DefInjected,Strings}`. If `DefInjected` is
+  missing (or doesn't cover all Def types), the missing part is filled in by
+  extracting translatable fields directly from `Defs/*.xml`, with
+  `Name`/`ParentName` inheritance resolved across all Defs files so labels
+  and descriptions defined only in abstract parent defs aren't lost. Text
+  injected into defs via `Patches/*.xml` (`PatchOperationAdd`/`Replace`/
+  `Insert`, including operations nested in `Sequence`/`FindMod`/
+  `Conditional`) is also picked up and takes priority over stale Defs/
+  DefInjected text. Only the folders the game actually loads for the newest
+  supported version are scanned: if the mod has a `LoadFolders.xml`, the
+  program reads it the same way RimWorld itself does and only takes the
+  current paths (including `IfModActive`-gated branches — there's no way to
+  know the user's installed mods, and translating unused content is
+  harmless, unlike missing translations for active content); if there's no
+  such file, it picks the newest version by folder name (`1.0`, `1.1`,
+  ...). Without this, mods that keep several versioned copies of `Defs`
+  side by side would have all of them scanned at once, translating the same
+  text multiple times for nothing. Found `Defs`/`Languages`/`Patches`
+  folders are deduplicated by their actual path on disk — needed when the
+  mod root and one of its own versioned subfolders (e.g. `1.6/`) both end
+  up in the set of paths to scan and would otherwise overlap.
+- **`src/rimworld_rules.py`** — a knowledge base of what counts as
+  translatable text in RimWorld's XML mods versus technical data
+  (defName/class-reference identifiers, placeholders `{0}`/`[founderName]`,
+  enum-like `moduleTypeID`/`installableSegmentTypes`, `ruleKey->text` from
+  ideology/quest grammar, hex colors and file paths). `xml_io.py` (what to
+  extract from `Defs/*.xml`) and `translator.py` (what to protect from
+  Argos/LLM during translation) consult these rules instead of duplicating
+  the logic themselves. Every rule is annotated with the real mod it was
+  found on — when a new bug shows up on a new mod, check here first for an
+  existing category before adding yet another ad-hoc regex elsewhere in the
+  code.
+- **`src/patches.py`** — extracts translatable text from `Patches/*.xml`.
+  Parses the common xpath shapes (`Defs/ThingDef[defName="X"]/field/subfield`,
+  multiple defNames via `or`, `li[N]` indices); anything more exotic is
+  skipped rather than risking a wrong DefInjected key.
+- **`src/xml_io.py`** — reads/writes `LanguageData` XML while preserving key
+  order and XML comments (section markers like `<!-- CABLES -->`), with
+  character-exact control over escaping and BOM, matching the original
+  mods. Also resolves `Name`/`ParentName` inheritance between def elements
+  and reads/writes `Strings/*.txt` word lists.
+- **`src/translator.py`** — translation through Argos Translate. Any
+  placeholders (see `rimworld_rules.TRANSLATION_PLACEHOLDER_RE`) are never
+  handed to the model as text — the string is cut into segments at their
+  boundaries, only the text between them is translated, and the
+  placeholders are put back verbatim (without this, Argos would sometimes
+  translate the placeholder's contents too, occasionally into a random
+  third language instead of the target one, or damage ideology grammar
+  tokens like `[founder_pronoun]`, causing RimWorld to log a "Bad string
+  pass" crash). For the same reason, after translating each segment the
+  result is checked for CJK characters (there shouldn't be any when the
+  target language is `ru`); if found, the translation is automatically
+  retried once, which usually produces a normal result.
+- **`src/glossary.py`** — a glossary of established RimWorld terms
+  (hediff, psycast, xenotype, shuttle, ...), gathered from real community
+  translations and aligned with the game's own official Russian
+  terminology. Terms are protected from machine translation the same way
+  placeholders are, and after Argos translates the surrounding text, the
+  community-accepted term is substituted back in (preserving the original's
+  capitalization).
+- **`src/generator.py`** — assembles the output mod: `Languages/<Lang>/...`
+  and `About/About.xml` (with `packageId`/`modDependencies`/`loadAfter`
+  pointing at the original mod, following the pattern of the existing
+  human-made translations in this collection). All user-supplied text is
+  XML-escaped.
+- **`src/llm_polish.py`** — the optional second pass through a local LLM
+  (Ollama), see "LLM translation polishing" above. Also fetches the list of
+  models installed in Ollama for the GUI/`--llm-model` dropdown, and
+  validates that every placeholder/rich-text tag in the model's answer
+  survived intact — a damaged answer is discarded in favor of the Argos
+  draft.
+- **`src/overrides.py`** — manual translation fixes that survive
+  regeneration: keeps a snapshot of what the program itself wrote, diffs
+  the current output files against it to detect user edits, and persists
+  them to `manual_overrides.json` so they always win on future runs.
+- **`src/incremental.py`** — incremental re-translation: compares the
+  mod's current English strings against a snapshot in
+  `.translation_cache.json` in the output folder and decides which keys
+  can be reused from the existing translation without re-translating them.
+- **`src/settings.py`** — persists GUI settings between runs in
+  `%APPDATA%\RimWorldModTranslator\settings.json`.
+- **`run_gui.py`** — the entry point for building the `.exe` with
+  PyInstaller (see "Ready-made .exe" above). Also doubles as a CLI entry
+  point when given command-line arguments.
+- **`src/safe_print.py`** — a `print()` wrapper that doesn't crash when
+  `sys.stdout`/`sys.stderr` are absent, which is the case for the `.exe`
+  built with `--windowed` (no console, and writing to it would otherwise
+  crash the app).
+- **`src/log_setup.py`** — a file log, `translator.log`, next to the exe
+  (or next to the project when run from source): logs scanning, every
+  translated string, and LLM request timings to Ollama line by line —
+  useful for telling a real hang apart from ordinary slow LLM polishing,
+  and for attaching to a support request.
 
-## Известные ограничения
+## Known limitations
 
-- Argos Translate — статистическая NMT-модель, а не LLM: она не «понимает»
-  контекст мода целиком. Глоссарий вставляет термин в исходной форме без
-  склонения — для коротких `label`-строк это не заметно, но в длинных
-  предложениях-описаниях согласование падежей может быть неидеальным.
-  `--llm` частично компенсирует это ценой скорости (см. выше).
-- Хардкод-строки, зашитые в C#/DLL мода (а не в XML), этим инструментом не
-  переводятся — как и у большинства ручных русификаторов в этой коллекции.
-- Определение "это переводимый текст, а не идентификатор/число/путь" в
-  `xml_io._looks_translatable` — эвристика по содержимому (пробелы, буквы,
-  не похоже на ID/путь/число), а не полный разбор XSD/схемы каждого DefType.
-  На простых Defs (ThingDef, RecipeDef, HediffDef и т.п.) она надёжна, но
-  сложные структуры вроде `QuestScriptDef` содержат десятки служебных
-  параметров узлов (`points`, `chance`, и другие специфичные для конкретных
-  классов quest-нод поля), которые могут иногда проходить эвристику и
-  попадать в перевод, если формально похожи на текст. Известные технические
-  поля (`storeAs`, `tile`, `faction`, `driverClass`-подобные составные
-  идентификаторы, `rulesStrings`-префиксы) уже отфильтрованы, но список не
-  претендует на полноту для всех типов Def — при находке новых случаев их
-  можно добавить в `_NEVER_TRANSLATABLE_TAGS`.
+- Argos Translate is a statistical NMT model, not an LLM: it doesn't
+  "understand" the mod's context as a whole. The glossary inserts terms in
+  their dictionary form without declension — unnoticeable for short
+  `label` strings, but case agreement in longer description sentences can
+  be imperfect. `--llm` partially compensates for this at the cost of
+  speed (see above).
+- Hardcoded strings baked into the mod's C#/DLL (rather than XML) aren't
+  translated by this tool — same as most manual translations in this
+  collection.
+- Determining "is this translatable text vs. an identifier/number/path" in
+  `rimworld_rules.is_translatable_value` is a content-based heuristic
+  (spaces, letters, doesn't look like an ID/path/number), not a full
+  XSD/schema parse of every Def type. It's reliable on simple Defs
+  (ThingDef, RecipeDef, HediffDef, etc.), but complex structures like
+  `QuestScriptDef` contain dozens of node-specific technical parameters
+  (`points`, `chance`, and other quest-node-class-specific fields) that can
+  occasionally slip past the heuristic and get translated if they happen
+  to look like text. Known technical fields (`storeAs`, `tile`, `faction`,
+  `driverClass`-like compound identifiers, `rulesStrings` prefixes) are
+  already filtered out, but the list doesn't claim to be complete for
+  every Def type — new cases can be added to
+  `rimworld_rules.NEVER_TRANSLATABLE_TAGS` as they're found.
 
-## Тесты
+## Tests
 
 ```powershell
 cd rimworld-mod-translator
@@ -339,12 +382,14 @@ pip install -r requirements-dev.txt
 pytest tests/ -v
 ```
 
-Тесты в `tests/` — маленькие синтетические фикстуры (не реальные моды),
-покрывающие баги, найденные вручную в процессе разработки: недостающий
-`DefInjected` при частичном `Languages/English`, дублирование строк из
-вложенных версионных папок, поддержку `LoadFolders.xml`, автоповтор при
-порче перевода в случайный третий язык, согласование рода/числа
-прилагательных из глоссария, и эвристику определения переводимых полей в
-`Defs/*.xml`. Два теста намеренно помечены `xfail` — они фиксируют известные
-границы применимости эвристики согласования (родительный падеж, соседство
-с глаголом), а не баг для исправления.
+Tests in `tests/` are small synthetic fixtures (not real mods) covering
+bugs found by hand during development: missing `DefInjected` with a partial
+`Languages/English`, duplicated strings from nested versioned folders,
+`LoadFolders.xml` support, `Patches/*.xml` extraction, `Name`/`ParentName`
+inheritance, manual overrides surviving regeneration, batch-mode
+translation memory, cooperative cancellation, automatic retry on
+translation corruption into a random third language, gender/number
+agreement for glossary adjectives, and the heuristic for detecting
+translatable fields in `Defs/*.xml`. Two tests are intentionally marked
+`xfail` — they document known limits of the agreement heuristic (genitive
+plural, adjacency to a verb), not a bug to fix.
