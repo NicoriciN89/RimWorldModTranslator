@@ -45,6 +45,37 @@ def test_agree_adjectives_leaves_unrelated_text_alone() -> None:
     assert agree_adjectives("просто текст без прилагательных") == "просто текст без прилагательных"
 
 
+def test_dryad_and_gauranlen_are_glossary_terms() -> None:
+    """Найдено на: alpha_memes — Argos разбирал "dryad" как "dry ad" и
+    выдавал «превосходство сухих ад»; "Gauranlen" транслитерировался
+    произвольно. Оба должны защищаться глоссарием."""
+    ctx = GlossaryContext()
+    protected = ctx.protect("dryad supremacy near the gauranlen tree")
+    assert "dryad" not in protected.lower()
+    assert "gauranlen" not in protected.lower()
+    restored = ctx.restore(protected)
+    assert "дриада" in restored
+    assert "дерево Гауранлен" in restored
+
+
+def test_capitalized_term_keeps_capital_letter() -> None:
+    """Термин, написанный в оригинале с большой буквы (начало предложения,
+    заголовок), должен подставляться с большой буквы и по-русски."""
+    ctx = GlossaryContext()
+    restored_upper = ctx.restore(ctx.protect("Dryads are friendly."))
+    assert restored_upper.startswith("Дриады")
+    ctx2 = GlossaryContext()
+    restored_lower = ctx2.restore(ctx2.protect("the dryads are friendly."))
+    assert "дриады" in restored_lower
+
+
+def test_precept_matches_official_translation() -> None:
+    """Официальный перевод Ideology использует «принцип» (ванильный UI:
+    "Обязательные принципы"), а не «предписание»."""
+    ctx = GlossaryContext()
+    assert "принцип" in ctx.restore(ctx.protect("precept"))
+
+
 @pytest.mark.xfail(reason="Известное ограничение: эвристика по окончанию не различает "
                           "падежи, родительный падеж мн.ч. 'труб' неотличим от м.р. ед.ч.")
 def test_agree_adjectives_genitive_plural_not_supported() -> None:

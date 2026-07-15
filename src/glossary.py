@@ -40,8 +40,11 @@ GLOSSARY: dict[str, str] = {
     "mechanoid": "механоид",
     "ideoligion": "идеология",
     "ideology": "идеология",
-    "precepts": "предписания",
-    "precept": "предписание",
+    # Официальный русский перевод Ideology использует «принцип» (видно в
+    # ванильном UI: "Обязательные принципы"), а не «предписание» — держим
+    # терминологию согласованной с игрой.
+    "precepts": "принципы",
+    "precept": "принцип",
     "colonists": "колонисты",
     "colonist": "колонист",
     "pawns": "персонажи",
@@ -68,7 +71,7 @@ GLOSSARY: dict[str, str] = {
     "aptitudes": "способности",
     "aptitude": "способность",
     "stat modifiers": "модификаторы характеристик",
-    "mental break": "срыв",
+    "mental break": "нервный срыв",
     "prison break": "побег из тюрьмы",
     "tolerance": "толерантность",
     "overdose": "передозировка",
@@ -80,7 +83,43 @@ GLOSSARY: dict[str, str] = {
     "ritual": "ритуал",
     "meditation": "медитация",
     "storyteller": "рассказчик",
+    # Материалы/ресурсы (устоявшиеся русские названия из перевода игры)
+    "plasteel": "пласталь",
+    "chemfuel": "химтопливо",
+    "neutroamine": "нейтроамин",
+    "luciferium": "люциферий",
+    "pemmican": "пеммикан",
+    "kibble": "комбикорм",
+    # Существа/события
+    "thrumbo": "трумбо",
+    "scythers": "жнецы",
+    "scyther": "жнец",
+    "centipedes": "многоножки",
+    "centipede": "многоножка",
+    "toxic fallout": "токсичные осадки",
+    "solar flare": "солнечная вспышка",
+    "cryptosleep": "криптосон",
+    # Biotech
+    "mechanitor": "механитор",
+    "sanguophages": "сангвофаги",
+    "sanguophage": "сангвофаг",
+    "ghouls": "гули",
+    "ghoul": "гуль",
+    "deathrest": "смертный сон",
+    # Ideology: деревья Гауранлен и дриады (найдено на: alpha_memes —
+    # Argos разбирал "dryad" как "dry ad" и выдавал «сухих ад»).
+    "gauranlen tree": "дерево Гауранлен",
+    "gauranlen": "Гауранлен",
+    "dryads": "дриады",
+    "dryad": "дриада",
+    "anima tree": "дерево анима",
+    "anima": "анима",
+    # Термины популярных модов (найдено на: alpha_memes — ритуал в labels
+    # переводится, а упоминание в description оставалось английским).
+    "ocular warping": "искривление глаз",
     # Строения/техника
+    "turret": "турель",
+    "mortar": "миномёт",
     "server": "сервер",
     "component": "компонент",
     "shuttle": "шаттл",
@@ -182,8 +221,15 @@ class GlossaryContext:
 
     def protect(self, text: str) -> str:
         def repl(m: re.Match) -> str:
-            term = m.group(0).lower()
-            self._tokens.append(GLOSSARY[term])
+            matched = m.group(0)
+            replacement = GLOSSARY[matched.lower()]
+            # Сохраняем заглавную букву оригинала: "Dryad supremacy" в начале
+            # предложения/заголовка должно давать «Дриада...», а не «дриада»
+            # посреди фразы с большой буквы. Обратное (опустить регистр) не
+            # делаем — в словаре имена собственные уже с большой буквы.
+            if matched[:1].isupper() and replacement[:1].islower():
+                replacement = replacement[0].upper() + replacement[1:]
+            self._tokens.append(replacement)
             return f" {_TOKEN_PREFIX}{len(self._tokens) - 1} "
 
         return _TERM_RE.sub(repl, text)
