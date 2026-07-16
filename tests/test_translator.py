@@ -5,13 +5,22 @@ from __future__ import annotations
 import re
 from unittest.mock import MagicMock, patch
 
-from src.translator import TranslationEngine
+from src.translator import ArgosPackageSetupError, TranslationEngine
 
 
 def _engine_with_fake_translate(fake_translate_raw):
     engine = TranslationEngine("en", "ru")
     engine._translation = object()  # пропускаем реальную инициализацию Argos
     engine._translate_raw = fake_translate_raw
+    return engine
+
+
+def _engine_with_fake_underlying_translation(fake_translate):
+    """В отличие от _engine_with_fake_translate (подменяет весь метод
+    _translate_raw), здесь подменяется только self._translation.translate —
+    нужно для тестов самой логики повтора ВНУТРИ _translate_raw."""
+    engine = TranslationEngine("en", "ru")
+    engine._translation = MagicMock(translate=fake_translate)
     return engine
 
 
@@ -225,3 +234,45 @@ def test_bracketed_grammar_tokens_survive_translation() -> None:
     assert "[founder_possessive]" in result
     assert "[founder_pronoun]" in result
     assert "[founder pronoun]" not in result
+
+
+def test_translate_raw_retries_once_on_transient_oserror() -> None:
+    """Найдено на: внешний отчёт пользователя. Антивирус может ВРЕМЕННО
+    заблокировать файл языковой модели для чтения (не удалить безвозвратно,
+    а держать открытым на время своего сканирования) уже ПОСЛЕ того, как
+    _ensure_ready проверила целостность файла по размеру и признала пакет
+    готовым — sentencepiece/ctranslate2 в этот момент падают голым OSError
+    на первом же вызове translate(). Одна повторная попытка (с паузой)
+    должна подхватить успешный результат, если ко второму разу файл уже
+    разблокирован."""
+    calls = {"n": 0}
+
+    def fake_translate(text: str) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError('Not found: "...\\sentencepiece.model": No such file or directory')
+        return "переведено"
+
+    engine = _engine_with_fake_underlying_translation(fake_translate)
+    with patch("src.translator.time.sleep"):
+        result = engine._translate_raw("some text")
+
+    assert result == "переведено"
+    assert calls["n"] == 2
+
+
+def test_translate_raw_raises_clear_error_when_still_broken_after_retry() -> None:
+    """Если файл модели недоступен даже со второй попытки — это не
+    временная блокировка антивирусом, а что-то более серьёзное; пользователь
+    должен увидеть понятную causa (не голый traceback ctranslate2/
+    sentencepiece) с практическим советом, что делать."""
+    def always_fails(text: str) -> str:
+        raise OSError('Not found: "...\\sentencepiece.model": No such file or directory')
+
+    engine = _engine_with_fake_underlying_translation(always_fails)
+    with patch("src.translator.time.sleep"):
+        try:
+            engine._translate_raw("some text")
+            assert False, "ожидалось исключение"
+        except ArgosPackageSetupError as e:
+            assert "антивирус" in str(e).lower()

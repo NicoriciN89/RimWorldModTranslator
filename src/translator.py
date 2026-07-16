@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -339,7 +340,33 @@ class TranslationEngine:
         package.install_from_path(download_path)
 
     def _translate_raw(self, text: str) -> str:
-        return self._translation.translate(text)
+        try:
+            return self._translation.translate(text)
+        except OSError as e:
+            # Найдено на: внешний отчёт пользователя, тот же класс проблемы,
+            # что и _repair_bundled_package_if_broken, но в другой момент —
+            # антивирус может ВРЕМЕННО заблокировать файл модели для чтения
+            # (не удалить/карантинировать безвозвратно, а держать открытым
+            # на время своего сканирования) уже ПОСЛЕ того, как _ensure_ready
+            # проверила целостность файла по размеру и признала пакет годным.
+            # sentencepiece/ctranslate2 в этот момент падают голым OSError
+            # ("No such file or directory", хотя файл физически на месте) —
+            # без повторной попытки первая же строка перевода роняла всю
+            # программу. Одна пауза и повтор обычно достаточны: реал-тайм
+            # проверка антивируса занимает секунды, не минуты.
+            log.warning("Первый вызов перевода упал с OSError (%s) — похоже, файл модели "
+                        "временно заблокирован (антивирус?). Жду 3с и пробую ещё раз.", e)
+            time.sleep(3)
+            try:
+                return self._translation.translate(text)
+            except OSError as e2:
+                raise ArgosPackageSetupError(
+                    f"Файл языковой модели Argos недоступен для чтения даже со второй "
+                    f"попытки: {e2}. Обычно это антивирус, который блокирует файлы "
+                    f"программы во время проверки. Попробуйте: 1) добавить папку "
+                    f"программы в исключения антивируса, 2) подождать немного и "
+                    f"запустить перевод ещё раз."
+                ) from e2
 
     def _translate_short(self, stripped: str, use_glossary: bool) -> str:
         """Переводит один короткий (гарантированно не обрезаемый моделью по
