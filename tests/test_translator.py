@@ -236,20 +236,22 @@ def test_bracketed_grammar_tokens_survive_translation() -> None:
     assert "[founder pronoun]" not in result
 
 
-def test_translate_raw_retries_once_on_transient_oserror() -> None:
+def test_translate_raw_retries_until_transient_oserror_clears() -> None:
     """Найдено на: внешний отчёт пользователя. Антивирус может ВРЕМЕННО
     заблокировать файл языковой модели для чтения (не удалить безвозвратно,
     а держать открытым на время своего сканирования) уже ПОСЛЕ того, как
     _ensure_ready проверила целостность файла по размеру и признала пакет
     готовым — sentencepiece/ctranslate2 в этот момент падают голым OSError
-    на первом же вызове translate(). Одна повторная попытка (с паузой)
-    должна подхватить успешный результат, если ко второму разу файл уже
-    разблокирован."""
+    на первом же вызове translate(). Один и тот же пользователь сообщил, что
+    единственной повторной попытки (было в 1.4.3, ~3с паузы) недостаточно —
+    файл оставался недоступен ещё несколько секунд подряд. Несколько попыток
+    с растущей паузой должны подхватить успешный результат, если файл
+    разблокируется хотя бы на одной из них."""
     calls = {"n": 0}
 
     def fake_translate(text: str) -> str:
         calls["n"] += 1
-        if calls["n"] == 1:
+        if calls["n"] < 4:
             raise OSError('Not found: "...\\sentencepiece.model": No such file or directory')
         return "переведено"
 
@@ -258,14 +260,14 @@ def test_translate_raw_retries_once_on_transient_oserror() -> None:
         result = engine._translate_raw("some text")
 
     assert result == "переведено"
-    assert calls["n"] == 2
+    assert calls["n"] == 4
 
 
-def test_translate_raw_raises_clear_error_when_still_broken_after_retry() -> None:
-    """Если файл модели недоступен даже со второй попытки — это не
-    временная блокировка антивирусом, а что-то более серьёзное; пользователь
-    должен увидеть понятную causa (не голый traceback ctranslate2/
-    sentencepiece) с практическим советом, что делать."""
+def test_translate_raw_raises_clear_error_when_still_broken_after_all_retries() -> None:
+    """Если файл модели недоступен даже после всех повторных попыток — это
+    не временная блокировка антивирусом, а что-то более серьёзное;
+    пользователь должен увидеть понятную причину (не голый traceback
+    ctranslate2/sentencepiece) с практическим советом, что делать."""
     def always_fails(text: str) -> str:
         raise OSError('Not found: "...\\sentencepiece.model": No such file or directory')
 
