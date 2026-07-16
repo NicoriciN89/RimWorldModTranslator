@@ -78,17 +78,12 @@ def _bundled_packages_root() -> Path | None:
     return candidate if candidate.is_dir() else None
 
 
-def _install_bundled_package(source_lang: str, target_lang: str) -> bool:
-    """Копирует встроенный пакет Argos (если он есть в дистрибутиве для этой
-    пары языков) прямо в папку установленных пакетов Argos — тот же эффект,
-    что у package.install_from_path(), но без скачивания. Возвращает True,
-    если подходящий встроенный пакет найден и скопирован."""
-    import argostranslate.settings as settings
-
+def _find_bundled_candidate(source_lang: str, target_lang: str) -> Path | None:
+    """Ищет папку встроенного (bundled) пакета Argos для этой пары языков
+    среди bundled_packages/ — без побочных эффектов, только поиск."""
     root = _bundled_packages_root()
     if root is None:
-        return False
-
+        return None
     for candidate in root.iterdir():
         if not candidate.is_dir():
             continue
@@ -100,14 +95,108 @@ def _install_bundled_package(source_lang: str, target_lang: str) -> bool:
         except (ValueError, OSError):
             continue
         if metadata.get("from_code") == source_lang and metadata.get("to_code") == target_lang:
-            dest_dir = settings.package_data_dir / candidate.name
-            if dest_dir.is_dir():
-                return True
-            log.info("Устанавливаю встроенный пакет Argos %s->%s из %s (без скачивания)",
-                      source_lang, target_lang, candidate)
-            shutil.copytree(candidate, dest_dir)
+            return candidate
+    return None
+
+
+def _copy_bundled_package_or_raise(candidate: Path, dest_dir: Path,
+                                    source_lang: str, target_lang: str) -> None:
+    """Копирует candidate в dest_dir (dest_dir не должна существовать на
+    входе) и проверяет результат — общая часть между "устанавливаю с нуля" и
+    "переустанавливаю неполную копию", чтобы не дублировать текст ошибки."""
+    shutil.copytree(candidate, dest_dir)
+    if not _bundled_copy_is_intact(candidate, dest_dir):
+        raise ArgosPackageSetupError(
+            f"Не удалось полностью скопировать встроенный языковой пакет "
+            f"{source_lang}->{target_lang} — часть файлов отсутствует после "
+            f"копирования. Обычно это антивирус, который в реальном времени "
+            f"проверяет и временно блокирует/карантинит только что "
+            f"распакованные файлы программы. Попробуйте: 1) добавить папку "
+            f"программы в исключения антивируса, 2) подождать немного и "
+            f"запустить перевод ещё раз, 3) убедиться, что файл "
+            f"{dest_dir / 'sentencepiece.model'} не пропал из карантина."
+        )
+
+
+def _repair_bundled_package_if_broken(source_lang: str, target_lang: str) -> bool:
+    """Если для этой пары языков есть встроенный пакет И уже "установленная"
+    копия существует, но повреждена/неполна — переустанавливает её и
+    возвращает True (вызывающему коду нужно сбросить lru_cache
+    get_installed_languages(), см. _ensure_ready).
+
+    Почему это нужно ДО опроса Argos "установлен ли язык": Argos Translate
+    считает языковую пару установленной по одному факту существования папки
+    пакета с валидным metadata.json — не проверяя файлы модели внутри. Если
+    антивирус карантинирует файл модели сразу после распаковки exe
+    (реальный случай, воспроизведённый пользователем), Argos продолжает
+    считать пакет "установленным", и весь код установки/докачки (см. вызов
+    ниже в _ensure_ready) просто никогда не вызывается — перевод падает на
+    первой же строке с невнятной ошибкой ctranslate2, и без вмешательства
+    извне это никогда не самоисправляется. Отсутствие встроенного пакета
+    (candidate is None, напр. для языка, для которого нет bundled-версии)
+    не является ошибкой — тогда просто нечем чинить, поведение не меняется."""
+    import argostranslate.settings as settings
+
+    candidate = _find_bundled_candidate(source_lang, target_lang)
+    if candidate is None:
+        return False
+
+    dest_dir = settings.package_data_dir / candidate.name
+    if not dest_dir.is_dir() or _bundled_copy_is_intact(candidate, dest_dir):
+        return False
+
+    log.warning("Встроенный пакет Argos %s->%s скопирован не полностью (%s) — "
+                "переустанавливаю", source_lang, target_lang, dest_dir)
+    shutil.rmtree(dest_dir)
+    _copy_bundled_package_or_raise(candidate, dest_dir, source_lang, target_lang)
+    return True
+
+
+def _install_bundled_package(source_lang: str, target_lang: str) -> bool:
+    """Копирует встроенный пакет Argos (если он есть в дистрибутиве для этой
+    пары языков) прямо в папку установленных пакетов Argos — тот же эффект,
+    что у package.install_from_path(), но без скачивания. Возвращает True,
+    если подходящий встроенный пакет найден и скопирован (в том числе если
+    уже был установлен ранее). Обычно вызывается только когда Argos ЕЩЁ НЕ
+    считает языковую пару установленной (см. _ensure_ready) — основной
+    случай повреждённой уже "установленной" копии перехватывает раньше
+    _repair_bundled_package_if_broken. Проверка целостности здесь — вторая
+    линия защиты на случай, если copytree сам оборвался на середине (диск
+    кончился, процесс убили) в один и тот же запуск."""
+    import argostranslate.settings as settings
+
+    candidate = _find_bundled_candidate(source_lang, target_lang)
+    if candidate is None:
+        return False
+
+    dest_dir = settings.package_data_dir / candidate.name
+    if dest_dir.is_dir():
+        if _bundled_copy_is_intact(candidate, dest_dir):
             return True
-    return False
+        shutil.rmtree(dest_dir)
+    else:
+        log.info("Устанавливаю встроенный пакет Argos %s->%s из %s (без скачивания)",
+                  source_lang, target_lang, candidate)
+    _copy_bundled_package_or_raise(candidate, dest_dir, source_lang, target_lang)
+    return True
+
+
+def _bundled_copy_is_intact(source: Path, dest: Path) -> bool:
+    """Сверяет размеры всех файлов source и dest — быстрая (без хеширования)
+    проверка, что shutil.copytree реально перенёс все байты, а не оставил
+    dest частично скопированной/карантинированной антивирусом папкой,
+    которая выглядит как валидная (dest_dir.is_dir() == True), но у которой
+    внутри не хватает или повреждён один из файлов модели."""
+    for src_file in source.rglob("*"):
+        if src_file.is_dir():
+            continue
+        dest_file = dest / src_file.relative_to(source)
+        try:
+            if not dest_file.is_file() or dest_file.stat().st_size != src_file.stat().st_size:
+                return False
+        except OSError:
+            return False
+    return True
 
 
 def _install_bundled_minisbd_models() -> None:
@@ -126,8 +215,12 @@ def _install_bundled_minisbd_models() -> None:
     dest_dir = Path(settings.data_dir) / "minisbd"
     for model in src_dir.glob("*.onnx"):
         dest = dest_dir / model.name
-        if dest.is_file():
+        if dest.is_file() and dest.stat().st_size == model.stat().st_size:
             continue
+        # Файл может существовать, но быть недокопированным с прошлого
+        # запуска (та же причина, что у _bundled_copy_is_intact выше —
+        # антивирус временно блокирует свежераспакованные файлы) — размер
+        # не совпадёт, и copy2 просто перезапишет его целиком.
         log.info("Устанавливаю встроенную модель сегментации MiniSBD: %s", model.name)
         dest_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(model, dest)
@@ -161,6 +254,18 @@ class TranslationEngine:
         import argostranslate.translate as translate
 
         _install_bundled_minisbd_models()
+
+        # Argos Translate считает языковую пару "установленной" по одному
+        # факту существования папки пакета с валидным metadata.json — не
+        # проверяя, что файлы модели внутри реально целые. Раз в процессе
+        # мы можем починить встроенный (bundled) пакет, если он битый, надо
+        # сделать это ДО опроса get_installed_languages(), иначе Argos своим
+        # ответом "уже установлен" целиком скрывает от нас необходимость
+        # чинить — ровно тот баг, который уронил перевод у пользователя,
+        # чью копию пакета антивирус карантинировал сразу после распаковки.
+        repaired = _repair_bundled_package_if_broken(self.source_lang, self.target_lang)
+        if repaired:
+            translate.get_installed_languages.cache_clear()
 
         installed = translate.get_installed_languages()
         from_lang = next((l for l in installed if l.code == self.source_lang), None)

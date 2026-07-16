@@ -153,6 +153,38 @@ def test_ensure_ready_clears_installed_languages_cache_after_first_install() -> 
     assert engine.is_ready()
 
 
+def test_ensure_ready_repairs_broken_bundled_package_argos_thinks_is_installed() -> None:
+    """Реальный баг из отчёта пользователя: антивирус карантинировал файл
+    модели сразу после распаковки exe, но argostranslate.translate.
+    get_installed_languages() всё равно возвращает язык как "установленный"
+    (оно смотрит только на metadata.json, не на файлы модели) — поэтому
+    старый код НИКОГДА не вызывал _install_bundled_package (тот вызывается
+    только если from_lang/to_lang отсутствуют среди установленных), и
+    неполная копия оставалась битой навсегда. _ensure_ready должна вызывать
+    _repair_bundled_package_if_broken БЕЗУСЛОВНО, до опроса Argos."""
+    import argostranslate.translate as real_translate
+
+    fake_lang_en = MagicMock(code="en")
+    fake_lang_ru = MagicMock(code="ru")
+    fake_lang_en.get_translation = MagicMock(return_value="translation-object")
+
+    # Argos с самого начала считает пару установленной — ровно то, что
+    # происходит, когда metadata.json существует, а sentencepiece.model нет.
+    with patch.object(real_translate, "get_installed_languages",
+                      return_value=[fake_lang_en, fake_lang_ru]):
+        with patch("src.translator._repair_bundled_package_if_broken",
+                   return_value=True) as fake_repair:
+            with patch("src.translator._install_bundled_package") as fake_install:
+                engine = TranslationEngine("en", "ru")
+                engine._ensure_ready()
+
+    fake_repair.assert_called_once_with("en", "ru")
+    # Раз Argos считает пару установленной, обычный путь установки не должен
+    # вызываться вовсе — только починка уже "установленной" копии.
+    fake_install.assert_not_called()
+    assert engine.is_ready()
+
+
 def test_rule_string_key_prefix_is_not_translated() -> None:
     """QuestScriptDef.*.rulesStrings хранит "ключ->текст" (напр.
     "distress->Distress Call") — идентификатор до стрелки должен остаться
