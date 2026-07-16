@@ -136,6 +136,31 @@ def test_qualified_def_tag_generates_both_short_and_qualified_definjected(tmp_pa
         assert [e.key for e in task.data.keyed_items()] == ["MakaiTech_VPE_Golden_Order.label"]
 
 
+def test_qualified_def_tag_pattern_confirmed_on_second_independent_framework(tmp_path: Path) -> None:
+    """Тот же паттерн, что и у PsycasterPathDef/VPE, независимо подтверждён
+    на другом стороннем фреймворке: AchievementTabDef определён в моде
+    Achievements Expanded (не в самом моде и не в движке), и готовый
+    человеческий русификатор superhero_genes__base (найден в коллекции
+    пользователя, сделан до появления этой функции) называет DefInjected-
+    папку полным именем AchievementsExpanded.AchievementTabDef — подтверждая,
+    что решение "писать перевод под обоими именами" — не специфичный хак для
+    одного мода, а общий паттерн для классов из чужих модов-фреймворков."""
+    achievements_xml = """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <AchievementsExpanded.AchievementTabDef>
+    <defName>TestTab</defName>
+    <label>Superhero Achievements</label>
+  </AchievementsExpanded.AchievementTabDef>
+</Defs>
+"""
+    _write(tmp_path / "Defs" / "Achievements.xml", achievements_xml)
+
+    result = scanner.scan_mod(tmp_path)
+
+    def_types = sorted(task.def_type for task in result.def_injected)
+    assert def_types == ["AchievementTabDef", "AchievementsExpanded.AchievementTabDef"]
+
+
 def test_stale_definjected_text_is_replaced_by_current_defs_text(tmp_path: Path) -> None:
     """Баг из celetech_shuttle_extension: автор мода обновил label/description
     в Defs/*.xml, но забыл синхронизировать Languages/English/DefInjected —
