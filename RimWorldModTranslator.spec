@@ -56,7 +56,11 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX выключен: сжатые им exe имеют характерную сигнатуру секций,
+    # которую антивирусы (особенно Defender) массово считают подозрительной
+    # само по себе, независимо от содержимого — один из известных источников
+    # ложных срабатываний на PyInstaller-сборках.
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -69,7 +73,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='RimWorldModTranslator',
 )
