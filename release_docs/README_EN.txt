@@ -44,7 +44,10 @@ HOW TO USE
 ----------
 1. Click "Обзор..." (Browse) next to "Папка мода" (Mod folder) — select the
    RimWorld mod folder (the one containing an About folder with About.xml).
-2. Pick the target language from the dropdown.
+2. Pick the target language from the dropdown. Russian, Ukrainian, German,
+   and French work right away, no internet needed — their language models
+   are already bundled with the program. Any other Argos Translate language
+   will be downloaded the first time you use it (needs internet once).
 3. Translation engine:
    - "Только Argos (быстро)" (Argos only, fast) — plain offline translation,
      takes seconds. Works right away, nothing extra to install.
