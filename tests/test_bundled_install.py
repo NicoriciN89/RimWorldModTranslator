@@ -21,6 +21,7 @@ from unittest.mock import patch
 import argostranslate.settings as argos_settings
 
 from src.translator import (
+    ArgosPackageSetupError,
     _bundled_copy_is_intact, _install_bundled_package, _repair_bundled_package_if_broken,
 )
 
@@ -70,6 +71,45 @@ def test_truncated_file_is_detected_as_incomplete(tmp_path: Path) -> None:
     _write(dest / "sentencepiece.model", b"x" * 40)
 
     assert not _bundled_copy_is_intact(src, dest)
+
+
+def test_size_matching_but_unreadable_sentencepiece_is_detected_as_incomplete(tmp_path: Path) -> None:
+    """Реальный внешний отчёт (Minduster, v1.4.3): stat() показывал у
+    sentencepiece.model правильный размер (совпадающий с исходником), но сам
+    файл нельзя было открыть на чтение — sentencepiece падал с "No such file
+    or directory" при каждой попытке перевода, на каждом перезапуске
+    программы, даже с полностью отключённым антивирусом. Проверка только по
+    размеру такие файлы-заглушки пропускала как "целые"."""
+    src = tmp_path / "src"
+    dest = tmp_path / "dest"
+    _write(src / "sentencepiece.model", b"x" * 100)
+    _write(dest / "sentencepiece.model", b"x" * 100)
+
+    with patch("src.translator._file_is_actually_readable", return_value=False):
+        assert not _bundled_copy_is_intact(src, dest)
+
+
+def test_copy_raises_distinct_error_when_source_itself_is_unreadable(tmp_path: Path) -> None:
+    """Если даже исходный (встроенный в программу) sentencepiece.model
+    нельзя прочитать, переустановка пакета никогда не поможет — пользователю
+    нужно чинить сам установленный дистрибутив программы, а не папку с
+    языковыми пакетами. Сообщение об ошибке должно это явно называть, а не
+    советовать "подождать и попробовать снова"."""
+    from src.translator import _copy_bundled_package_or_raise
+
+    candidate = tmp_path / "bundled" / "translate-en_ru-1_9"
+    dest_dir = tmp_path / "installed" / "translate-en_ru-1_9"
+    _write(candidate / "sentencepiece.model", b"x" * 100)
+
+    def fake_readable(path: Path) -> bool:
+        return path.name != "sentencepiece.model"
+
+    with patch("src.translator._file_is_actually_readable", side_effect=fake_readable):
+        try:
+            _copy_bundled_package_or_raise(candidate, dest_dir, "en", "ru")
+            assert False, "ожидалось ArgosPackageSetupError"
+        except ArgosPackageSetupError as e:
+            assert "внутри самой программы" in str(e)
 
 
 def test_repair_reinstalls_broken_copy_argos_still_thinks_is_installed(tmp_path: Path) -> None:

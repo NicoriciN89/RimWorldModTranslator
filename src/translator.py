@@ -107,6 +107,27 @@ def _copy_bundled_package_or_raise(candidate: Path, dest_dir: Path,
     "переустанавливаю неполную копию", чтобы не дублировать текст ошибки."""
     shutil.copytree(candidate, dest_dir)
     if not _bundled_copy_is_intact(candidate, dest_dir):
+        sp_source = candidate / "sentencepiece.model"
+        if sp_source.is_file() and not _file_is_actually_readable(sp_source):
+            # Источник (файл внутри самой программы, из которого мы копируем)
+            # тоже не читается — значит дело не в копии, а в самом
+            # установленном дистрибутиве программы. Повторная переустановка
+            # никогда не поможет, пока не будет починен сам исходный файл —
+            # найдено при разборе случая, где _bundled_copy_is_intact
+            # проходила по размеру, но реальное чтение падало раз за разом
+            # при каждом перезапуске программы.
+            raise ArgosPackageSetupError(
+                f"Файл модели {sp_source} внутри самой программы повреждён "
+                f"или недоступен для чтения (не только копия, а исходник) — "
+                f"переустановка пакета не поможет. Похоже, антивирус или "
+                f"система защиты Windows подменили этот файл заглушкой при "
+                f"распаковке программы. Попробуйте: 1) полностью удалить "
+                f"папку программы и заново распаковать zip-архив в новое "
+                f"место (не туда, где уже стояла старая версия), добавив "
+                f"её в исключения антивируса ДО распаковки, 2) проверить "
+                f"диск на ошибки, 3) если ничего не помогает — написать "
+                f"разработчику с этим текстом ошибки."
+            )
         raise ArgosPackageSetupError(
             f"Не удалось полностью скопировать встроенный языковой пакет "
             f"{source_lang}->{target_lang} — часть файлов отсутствует после "
@@ -182,12 +203,31 @@ def _install_bundled_package(source_lang: str, target_lang: str) -> bool:
     return True
 
 
+def _file_is_actually_readable(path: Path) -> bool:
+    """Пытается реально открыть и прочитать первый байт файла — в отличие от
+    stat()/is_file(), которые могут вернуть "всё нормально" для файла,
+    подмененного антивирусом/облачной синхронизацией на заглушку-плейсхолдер
+    (reparse point с корректными метаданными размера, но без реального
+    содержимого). Найдено на реальном случае: у пользователя stat() показывал
+    правильный размер sentencepiece.model, а sentencepiece всё равно падал
+    с "No such file or directory" при попытке его открыть — то есть проверка
+    только по размеру (см. историю ниже) пропускала именно такие файлы."""
+    try:
+        with path.open("rb") as f:
+            f.read(1)
+        return True
+    except OSError:
+        return False
+
+
 def _bundled_copy_is_intact(source: Path, dest: Path) -> bool:
     """Сверяет размеры всех файлов source и dest — быстрая (без хеширования)
     проверка, что shutil.copytree реально перенёс все байты, а не оставил
     dest частично скопированной/карантинированной антивирусом папкой,
     которая выглядит как валидная (dest_dir.is_dir() == True), но у которой
-    внутри не хватает или повреждён один из файлов модели."""
+    внутри не хватает или повреждён один из файлов модели. Дополнительно
+    реально открывает sentencepiece.model/bpe.model на чтение — размер сам
+    по себе не ловит файлы-заглушки (см. _file_is_actually_readable)."""
     for src_file in source.rglob("*"):
         if src_file.is_dir():
             continue
@@ -196,6 +236,8 @@ def _bundled_copy_is_intact(source: Path, dest: Path) -> bool:
             if not dest_file.is_file() or dest_file.stat().st_size != src_file.stat().st_size:
                 return False
         except OSError:
+            return False
+        if dest_file.name in ("sentencepiece.model", "bpe.model") and not _file_is_actually_readable(dest_file):
             return False
     return True
 
