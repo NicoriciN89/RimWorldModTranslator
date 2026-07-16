@@ -79,12 +79,13 @@ def test_definjected_partial_coverage_fills_gap(tmp_path: Path) -> None:
 def test_fully_qualified_def_tag_matches_short_definjected_folder(tmp_path: Path) -> None:
     """Баг из celetech_shuttle_extension: RimWorld разрешает полностью
     квалифицированное имя класса как тег def-элемента (напр.
-    <My.Namespace.FooDef>...</My.Namespace.FooDef>), а игра трактует его как
-    обычный FooDef — DefInjected-папка мода называется по короткому имени.
-    Раньше def_type брался как raw XML-тег целиком, из-за чего "покрыт ли
-    этот DefType в DefInjected" никогда не совпадало, и fallback-сканирование
-    дублировало уже покрытый контент под отдельной (неверной) папкой с
-    полным путём класса вместо короткого имени."""
+    <My.Namespace.FooDef>...</My.Namespace.FooDef>). Короткое имя (FooDef)
+    уже покрыто готовым DefInjected мода — fallback не должен дублировать
+    его под тем же коротким именем. Полное имя (My.Namespace.FooDef) готовым
+    DefInjected не покрыто — под ним фолбэк добавляет ОТДЕЛЬНУЮ задачу (см.
+    test_qualified_def_tag_generates_both_short_and_qualified_definjected:
+    статически нельзя определить, что из двух имён реально ждёт игра для
+    класса, определённого сторонним C#-кодом, — пишем оба)."""
     qualified_defs_xml = """<?xml version="1.0" encoding="utf-8"?>
 <Defs>
   <My.Namespace.FooDef>
@@ -100,8 +101,39 @@ def test_fully_qualified_def_tag_matches_short_definjected_folder(tmp_path: Path
 
     result = scanner.scan_mod(tmp_path)
 
-    assert len(result.def_injected) == 1
-    assert result.def_injected[0].def_type == "FooDef"
+    def_types = sorted(task.def_type for task in result.def_injected)
+    assert def_types == ["FooDef", "My.Namespace.FooDef"]
+    # Короткое имя — из готового DefInjected мода (не из fallback), не дублируется.
+    short_task = next(t for t in result.def_injected if t.def_type == "FooDef")
+    assert [e.key for e in short_task.data.keyed_items()] == ["TestFoo.label"]
+    qualified_task = next(t for t in result.def_injected if t.def_type == "My.Namespace.FooDef")
+    assert [e.key for e in qualified_task.data.keyed_items()] == ["TestFoo.label"]
+
+
+def test_qualified_def_tag_generates_both_short_and_qualified_definjected(tmp_path: Path) -> None:
+    """Баг из makaitech_psycast: PsycasterPathDef определён не в движке, а в
+    стороннем моде-фреймворке Vanilla Psycasts Expanded — официальный
+    русификатор VPE называет DefInjected-папку ПОЛНЫМ именем класса
+    (VanillaPsycastsExpanded.PsycasterPathDef), в отличие от случая
+    celetech_shuttle_extension (свой ThingDef, короткое имя). Без Languages/
+    English вообще (чистый fallback) нельзя понять, какое имя ждёт игра —
+    поэтому обе задачи (короткая и полная) должны быть сгенерированы."""
+    qualified_defs_xml = """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <VanillaPsycastsExpanded.PsycasterPathDef>
+    <defName>MakaiTech_VPE_Golden_Order</defName>
+    <label>Enlightened One</label>
+  </VanillaPsycastsExpanded.PsycasterPathDef>
+</Defs>
+"""
+    _write(tmp_path / "Defs" / "PstcastPath.xml", qualified_defs_xml)
+
+    result = scanner.scan_mod(tmp_path)
+
+    def_types = sorted(task.def_type for task in result.def_injected)
+    assert def_types == ["PsycasterPathDef", "VanillaPsycastsExpanded.PsycasterPathDef"]
+    for task in result.def_injected:
+        assert [e.key for e in task.data.keyed_items()] == ["MakaiTech_VPE_Golden_Order.label"]
 
 
 def test_stale_definjected_text_is_replaced_by_current_defs_text(tmp_path: Path) -> None:

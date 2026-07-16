@@ -36,10 +36,13 @@ def test_label_and_description_are_extracted(tmp_path: Path) -> None:
 
 def test_fully_qualified_class_name_tag_yields_short_def_type(tmp_path: Path) -> None:
     """RimWorld разрешает полностью квалифицированное имя класса как тег
-    def-элемента (напр. <My.Namespace.FooDef>...</My.Namespace.FooDef>) для
-    разрешения неоднозначности между namespace'ами — игра трактует его как
-    обычный FooDef, и Languages/<Lang>/DefInjected/ мода называется по
-    короткому имени (последний сегмент), а не по полному пути класса."""
+    def-элемента (напр. <My.Namespace.FooDef>...</My.Namespace.FooDef>).
+    def_type всегда короткий (последний сегмент) — но полное имя тоже
+    сохраняется в qualified_def_type, потому что statically нельзя понять,
+    какое из двух имён папки DefInjected реально ждёт игра (см.
+    scanner._scan_defs_fallback: класс может быть как своим ThingType мода
+    с разрешённой неоднозначностью namespace — короткое имя, так и чужим
+    типом из мода-фреймворка вроде Vanilla Psycasts Expanded — полное имя)."""
     refs = _extract(tmp_path, """<?xml version="1.0" encoding="utf-8"?>
 <Defs>
   <My.Namespace.FooDef>
@@ -50,6 +53,23 @@ def test_fully_qualified_class_name_tag_yields_short_def_type(tmp_path: Path) ->
 """)
     assert len(refs) == 1
     assert refs[0].def_type == "FooDef"
+    assert refs[0].qualified_def_type == "My.Namespace.FooDef"
+
+
+def test_plain_def_tag_has_no_qualified_def_type(tmp_path: Path) -> None:
+    """Обычный (не составной) тег def-элемента не должен давать
+    qualified_def_type — дублировать перевод под ним некуда и незачем."""
+    refs = _extract(tmp_path, """<?xml version="1.0" encoding="utf-8"?>
+<Defs>
+  <ThingDef>
+    <defName>TestThing</defName>
+    <label>test thing</label>
+  </ThingDef>
+</Defs>
+""")
+    assert len(refs) == 1
+    assert refs[0].def_type == "ThingDef"
+    assert refs[0].qualified_def_type is None
 
 
 def test_description_with_literal_backslash_is_still_translatable(tmp_path: Path) -> None:

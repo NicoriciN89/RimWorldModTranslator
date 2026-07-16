@@ -189,11 +189,26 @@ def _scan_defs_fallback(defs_refs: list[tuple[Path, list[xml_io.DefFieldRef]]]) 
     """Раскладывает уже извлечённые поля (см. _def_refs_by_file) по задачам,
     сгруппированным по (DefType, имя файла) — так же, как их раскладывает по
     папкам DefInjected. Группировка по def_type КАЖДОЙ ссылки, а не первой в
-    файле: один Defs-файл может смешивать несколько типов def-ов."""
+    файле: один Defs-файл может смешивать несколько типов def-ов.
+
+    Найдено на: makaitech_psycast (PsycasterPathDef из стороннего мода-
+    фреймворка Vanilla Psycasts Expanded). Когда тег def-элемента был задан
+    полным именем класса (ref.qualified_def_type — см.
+    xml_io.extract_from_defs_root), нельзя статически определить, ждёт ли
+    игра короткое имя папки DefInjected (обычный случай, когда мод просто
+    снял неоднозначность namespace для СВОЕГО типа) или полное (когда сам
+    класс определён в чужом моде-фреймворке, как VPE, и его собственный
+    официальный русификатор называет папку полным путём) — без этого
+    заголовки/тултипы путей психокастов молча оставались английскими, хотя
+    перевод был сгенерирован под короткой, "неправильной" для игры папкой.
+    Поэтому пишем перевод под ОБОИМИ именами; лишний файл-дубликат для игры
+    безвреден, а его отсутствие вредило бы переводу."""
     grouped: dict[tuple[str, str], list[xml_io.DefFieldRef]] = {}
     for xml_file, refs in defs_refs:
         for ref in refs:
             grouped.setdefault((ref.def_type, xml_file.stem), []).append(ref)
+            if ref.qualified_def_type:
+                grouped.setdefault((ref.qualified_def_type, xml_file.stem), []).append(ref)
     return _tasks_from_refs(grouped)
 
 

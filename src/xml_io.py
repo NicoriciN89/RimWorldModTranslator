@@ -114,6 +114,9 @@ class DefFieldRef:
     def_name: str
     field_path: str
     text: str
+    # Полное имя класса (namespace.ClassName), если сам тег def-элемента был
+    # им задан и отличается от короткого def_type — см. extract_from_defs_root.
+    qualified_def_type: str | None = None
 
 
 def _walk_def(el: ET.Element, def_type: str, def_name: str, path_prefix: str,
@@ -247,19 +250,35 @@ def extract_from_defs_root(root: ET.Element, registry: dict[str, ET.Element]) ->
         if def_el.attrib.get("Abstract", "").lower() == "true":
             continue
         # RimWorld разрешает полностью квалифицированное имя класса как тег
-        # def-элемента (напр. <My.Namespace.FooDef>...</My.Namespace.FooDef>),
-        # когда имя класса неоднозначно между несколькими using-namespace'ами.
-        # Игра трактует его как обычный FooDef, и DefInjected-папка мода
-        # называется по короткому имени (последний сегмент) — без этого мы
-        # создавали бы отдельную (дублирующую) DefInjected-папку с полным
-        # путём вместо короткого имени, которое ожидает игра.
+        # def-элемента (напр. <My.Namespace.FooDef>...</My.Namespace.FooDef>).
+        # Какое имя папки DefInjected при этом ожидает игра, зависит от ТИПА
+        # класса, а по одному XML-тегу его не отличить:
+        #  - Найдено на: celetech_shuttle_extension — свой ThingDef мода,
+        #    квалифицированный только чтобы снять неоднозначность между
+        #    несколькими using-namespace; DefInjected называется коротким
+        #    именем (последний сегмент).
+        #  - Найдено на: makaitech_psycast (PsycasterPathDef из стороннего
+        #    мода-фреймворка Vanilla Psycasts Expanded) — официальный
+        #    русификатор VPE называет DefInjected-папку ПОЛНЫМ именем
+        #    (VanillaPsycastsExpanded.PsycasterPathDef); короткое имя игра
+        #    для таких чужих модовых классов не находит, и перевод путей
+        #    психокастов (заголовки/тултипы) молча оставался английским.
+        # Различить эти случаи статически без исходников C# мода нельзя,
+        # поэтому пишем перевод под ОБОИМИ именами — короткому и полному
+        # (если они разные) — лишний файл-дубликат безвреден для игры,
+        # а отсутствие нужного вредило бы переводу.
         def_type = def_el.tag.rsplit(".", 1)[-1]
+        qualified_def_type = def_el.tag if "." in def_el.tag and def_el.tag != def_type else None
         name_el = def_el.find("defName")
         def_name = name_el.text.strip() if name_el is not None and name_el.text else None
         if not def_name:
             continue
         resolved = resolve_inheritance(def_el, registry)
+        start = len(out)
         _walk_def(resolved, def_type, def_name, "", out)
+        if qualified_def_type:
+            for ref in out[start:]:
+                ref.qualified_def_type = qualified_def_type
     return out
 
 
