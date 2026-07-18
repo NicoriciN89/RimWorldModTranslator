@@ -15,6 +15,7 @@ from tkinter import (
 from tkinter import ttk
 
 from . import __version__, generator, main as main_module
+from .diagnostics import log_environment_snapshot
 from .llm_polish import DEFAULT_MODEL, list_installed_models
 from .log_setup import get_logger, setup_logging
 from .settings import load_settings, save_settings
@@ -431,6 +432,11 @@ class TranslatorApp:
 def main() -> None:
     log_path = setup_logging()
     log.info("=== RimWorld Mod Translator v%s запущен, лог: %s ===", __version__, log_path)
+    # В фоновом потоке: опрос WMI/PowerShell (антивирус, диск) занимает
+    # секунды из-за холодного старта powershell.exe — блокировать этим
+    # появление окна не стоит, а к моменту, когда лог понадобится для
+    # разбора проблемы, снимок уже успеет дописаться.
+    threading.Thread(target=log_environment_snapshot, args=(log_path.parent,), daemon=True).start()
     root = Tk()
     TranslatorApp(root)
     root.mainloop()

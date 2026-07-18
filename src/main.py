@@ -319,9 +319,11 @@ def main() -> None:
                               "английским текстом перед каждой переведённой строкой (для сверки)")
     args = parser.parse_args()
 
+    from .diagnostics import log_environment_snapshot
     from .log_setup import setup_logging
     log_path = setup_logging()
     log.info("=== CLI-запуск: %s ===", vars(args))
+    log_environment_snapshot(log_path.parent)
     safe_print(f"Лог: {log_path}", file=sys.stderr)
 
     memory: dict[str, str] = {}

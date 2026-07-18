@@ -383,6 +383,18 @@ class TranslationEngine:
 
     _TRANSLATE_RETRY_DELAYS_SECONDS = (2, 5, 10, 20)
 
+    def _model_file_path(self) -> Path | None:
+        """Достаёт путь к sentencepiece.model из обёрнутого argostranslate
+        объекта перевода — best-effort, структура объектов внутренняя для
+        библиотеки и не гарантирована контрактом. Используется только для
+        диагностики (log_model_file_probe), поэтому при любой неожиданности
+        просто возвращаем None, не роняя основной поток."""
+        try:
+            pkg = self._translation.underlying.pkg
+            return Path(pkg.package_path) / "sentencepiece.model"
+        except AttributeError:
+            return None
+
     def _translate_raw(self, text: str) -> str:
         # Найдено на: внешний отчёт пользователя, тот же класс проблемы, что и
         # _repair_bundled_package_if_broken, но в другой момент — что-то
@@ -407,6 +419,10 @@ class TranslationEngine:
                     log.warning("Вызов перевода упал с OSError (%s) — похоже, файл модели "
                                 "временно заблокирован (антивирус?). Жду %sс и пробую ещё раз.",
                                 e, self._TRANSLATE_RETRY_DELAYS_SECONDS[attempt])
+        model_path = self._model_file_path()
+        if model_path is not None:
+            from .diagnostics import log_model_file_probe
+            log_model_file_probe(model_path)
         raise ArgosPackageSetupError(
             f"Файл языковой модели Argos недоступен для чтения после нескольких "
             f"попыток на протяжении почти минуты: {last_error}. Обычно это "

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src.translator import ArgosPackageSetupError, TranslationEngine
@@ -278,3 +279,33 @@ def test_translate_raw_raises_clear_error_when_still_broken_after_all_retries() 
             assert False, "ожидалось исключение"
         except ArgosPackageSetupError as e:
             assert "антивирус" in str(e).lower()
+
+
+def test_translate_raw_probes_model_file_when_retries_exhausted() -> None:
+    """Пользовательская идея: раз файл модели так стабильно недоступен —
+    зафиксировать в логе диагностику именно этого файла (время открытия,
+    было ли оно аномально долгим) прямо в момент финального сбоя, а не
+    заставлять пользователя присылать отдельный отчёт руками."""
+    def always_fails(text: str) -> str:
+        raise OSError('Not found: "...\\sentencepiece.model": No such file or directory')
+
+    engine = _engine_with_fake_underlying_translation(always_fails)
+    with patch("src.translator.time.sleep"), \
+         patch.object(engine, "_model_file_path", return_value=Path("fake/sentencepiece.model")), \
+         patch("src.diagnostics.log_model_file_probe") as fake_probe:
+        try:
+            engine._translate_raw("some text")
+        except ArgosPackageSetupError:
+            pass
+
+    fake_probe.assert_called_once_with(Path("fake/sentencepiece.model"))
+
+
+def test_model_file_path_returns_none_when_translation_object_has_no_pkg() -> None:
+    """self._translation в обычной жизни — CachedTranslation, оборачивающий
+    PackageTranslation с атрибутом .pkg.package_path, но структура внутренняя
+    для argostranslate и не гарантирована — если она когда-нибудь изменится,
+    диагностика должна тихо отступить, а не уронить обработку ошибки."""
+    engine = TranslationEngine("en", "ru")
+    engine._translation = object()
+    assert engine._model_file_path() is None
