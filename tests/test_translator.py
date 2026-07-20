@@ -163,6 +163,26 @@ def test_ensure_ready_clears_installed_languages_cache_after_first_install() -> 
     assert engine.is_ready()
 
 
+def test_ensure_ready_raises_clear_error_for_unbundled_language_no_network() -> None:
+    """Программа полностью офлайн: нет сетевого кода вовсе. Если языковая
+    пара не установлена И не встроена в bundled_packages/, _ensure_ready
+    должна сразу сообщить об этом понятной ошибкой (без намёка на
+    автоматическую докачку), а не пытаться куда-то стучаться в сеть."""
+    import argostranslate.translate as real_translate
+
+    with patch.object(real_translate, "get_installed_languages", return_value=[]):
+        with patch("src.translator._install_bundled_package", return_value=False):
+            engine = TranslationEngine("en", "es")
+            try:
+                engine._ensure_ready()
+                assert False, "ожидалось исключение"
+            except ArgosPackageSetupError as e:
+                message = str(e).lower()
+                assert "офлайн" in message
+                assert "bundled_packages" in message
+    assert not engine.is_ready()
+
+
 def test_ensure_ready_repairs_broken_bundled_package_argos_thinks_is_installed() -> None:
     """Реальный баг из отчёта пользователя: антивирус карантинировал файл
     модели сразу после распаковки exe, но argostranslate.translate.

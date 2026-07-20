@@ -24,9 +24,11 @@ packages Python code into an exe — the same way many legitimate utilities
 are built. Some antivirus engines occasionally flag such builds heuristically
 just based on the packaging pattern, not because they found actual malicious
 code (this is called a false positive). The program contains no networking
-code that sends anything anywhere, except explicitly downloading Argos
-Translate/Ollama language models, which you trigger yourself the first time
-you use a new language.
+code at all for translation — Russian, Ukrainian, German, and French are
+bundled with it and nothing is ever downloaded for them. The optional LLM
+polishing feature talks only to Ollama running on your own machine
+(localhost), which you install and manage yourself; the program itself
+does not reach out to the internet.
 
 An earlier build was checked on VirusTotal (a service that scans a file
 with ~70 antivirus engines at once): 2 out of 68 engines flagged it (Bkav
@@ -44,10 +46,14 @@ HOW TO USE
 ----------
 1. Click "Обзор..." (Browse) next to "Папка мода" (Mod folder) — select the
    RimWorld mod folder (the one containing an About folder with About.xml).
-2. Pick the target language from the dropdown. Russian, Ukrainian, German,
-   and French work right away, no internet needed — their language models
-   are already bundled with the program. Any other Argos Translate language
-   will be downloaded the first time you use it (needs internet once).
+2. Pick the target language from the dropdown. The program is fully offline
+   and never downloads anything from the internet: Russian, Ukrainian,
+   German, and French are bundled with it and work right away. For any
+   other language, you'll need to manually download the Argos Translate
+   package for that language pair (e.g. from
+   https://www.argosopentech.com/argospm/index/, or on another computer
+   with internet) and place the package folder into bundled_packages/ next
+   to the program.
 3. Translation engine:
    - "Только Argos (быстро)" (Argos only, fast) — plain offline translation,
      takes seconds. Works right away, nothing extra to install.

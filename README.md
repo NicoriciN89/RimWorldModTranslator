@@ -10,8 +10,12 @@ offline through [Argos Translate](https://www.argosopentech.com/), and
 assembles a ready-to-use translation mod with the correct file structure
 and `About/About.xml`.
 
-Works without internet access (except for a one-time language model
-download on first use of a new language pair) and without any cloud API.
+Works fully offline, with no internet access and no cloud API at any point.
+Russian, Ukrainian, German, and French language models are bundled directly
+into the program; there is no download code for translation at all. Adding
+another language pair requires manually placing an Argos Translate package
+into `bundled_packages/` (see "Adding another language" below) — the program
+will never try to fetch one over the network.
 
 ## Installation
 
@@ -41,20 +45,35 @@ pip install pyinstaller
 pyinstaller RimWorldModTranslator.spec --noconfirm
 ```
 
-Before building, you can optionally drop a ready-made Argos `en->ru`
-language package into the `bundled_packages/` folder at the project root
-(copy the `translate-en_ru-*` folder from
-`%LOCALAPPDATA%\argos-translate\packages` — it appears there after the
-first use of the en->ru pair) — then the built .exe can translate to
-Russian right away, without downloading ~200 MB over the internet on the
-end user's first run (see "LLM polishing" below for a similar concern about
-network hangs). The build also works without this folder — the first
-translation into a new language will just download the package itself.
+The repo ships with Argos Translate packages for `en->ru`, `en->uk`, `en->de`,
+and `en->fr` pre-placed in `bundled_packages/` — the built .exe embeds them
+and can translate into any of those four languages immediately, with no
+network access at any point. Sentence segmentation uses a small bundled
+[MiniSBD](https://github.com/LibreTranslate/MiniSBD) onnx model instead of
+Stanza, which used to drag the entire `torch` library into the package as a
+dead import.
 
-The build takes about a minute and produces a folder of roughly **370 MB**
-(sentence segmentation uses a small bundled [MiniSBD](https://github.com/LibreTranslate/MiniSBD)
-onnx model instead of Stanza, which used to drag the entire `torch` library
-into the package as a dead import).
+### Adding another language
+
+There is no download code in the program at all — for any language pair
+beyond the four bundled ones, you place the Argos Translate package folder
+yourself:
+
+1. Get an Argos Translate package for the pair you want (`en->es`, for
+   example) — e.g. from https://www.argosopentech.com/argospm/index/, or by
+   installing it with `argostranslate` on another machine with internet and
+   copying the resulting folder from its packages directory.
+2. Drop that folder into `bundled_packages/` at the project root, alongside
+   `translate-en_ru-1_9` and the others.
+3. Rebuild the .exe (see below) — it will pick up the new package
+   automatically the same way it picks up the four bundled ones.
+
+If a user selects a language with no matching package in `bundled_packages/`,
+the program raises a clear error explaining that the pair isn't bundled and
+that it will never attempt to fetch one over the network.
+
+The build takes a few minutes and currently produces a folder of roughly
+**736 MB** (four bundled language packages at ~150-215 MB each).
 
 ### Plain window from source (for development)
 
@@ -132,8 +151,9 @@ python -m src.main --src "path\to\mod\folder" --out ".\output" --lang ru
   from the original. Doesn't affect translation speed — it's just a more
   convenient output format.
 
-On the first run for a new language pair, Argos Translate will download
-and install the required language model (fully offline after that).
+On the first run for a bundled language pair (ru/uk/de/fr), the required
+model is installed from the files bundled with the program — no download,
+no network access. For any other pair, see "Adding another language" above.
 
 ## Re-translating / updating a mod (`--update`)
 

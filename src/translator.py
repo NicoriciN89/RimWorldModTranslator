@@ -57,9 +57,6 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _LONG_SEGMENT_THRESHOLD = 200
 
 
-_PACKAGE_INDEX_TIMEOUT_SECONDS = 30
-_PACKAGE_DOWNLOAD_TIMEOUT_SECONDS = 300
-
 # Имя папки пакета внутри bundled_packages/ — совпадает с именем, которое
 # сам Argos Translate даёт установленному пакету на диске.
 _BUNDLED_PACKAGES_DIRNAME = "bundled_packages"
@@ -293,7 +290,6 @@ class TranslationEngine:
     def _ensure_ready(self) -> None:
         if self._translation is not None:
             return
-        import argostranslate.package as package
         import argostranslate.translate as translate
 
         _install_bundled_minisbd_models()
@@ -319,9 +315,7 @@ class TranslationEngine:
                 safe_print(f"[translator] Пакет {self.source_lang}->{self.target_lang} установлен "
                            f"из встроенных в программу файлов (без скачивания).", file=sys.stderr)
             else:
-                safe_print(f"[translator] Пакет {self.source_lang}->{self.target_lang} не установлен, "
-                           f"скачиваю...", file=sys.stderr)
-                self._download_and_install_package(package)
+                self._raise_language_not_bundled()
 
             # get_installed_languages() внутри самого argostranslate декорирован
             # @lru_cache — первый вызов (когда пакет ещё не установлен) навсегда
@@ -337,49 +331,22 @@ class TranslationEngine:
 
         self._translation = from_lang.get_translation(to_lang)
 
-    def _download_and_install_package(self, package) -> None:
-        """Обновление индекса пакетов и само скачивание — единственные места
-        в этой программе, где для перевода Argos нужен интернет. Оборачиваем
-        таймаутом: без него зависший/заблокированный (файрвол, антивирус,
-        VPN с полным перехватом трафика) сетевой запрос выглядел бы как
-        бесконечное "зависание" программы без единого сообщения об ошибке."""
-        import socket
-
-        default_timeout = socket.getdefaulttimeout()
-        try:
-            socket.setdefaulttimeout(_PACKAGE_INDEX_TIMEOUT_SECONDS)
-            package.update_package_index()
-            available = package.get_available_packages()
-        except OSError as e:
-            raise ArgosPackageSetupError(
-                f"Не удалось получить список языковых пакетов Argos Translate "
-                f"(нет интернета или он заблокирован файрволом/антивирусом/VPN): {e}"
-            ) from e
-        finally:
-            socket.setdefaulttimeout(default_timeout)
-
-        match = next((p for p in available
-                      if p.from_code == self.source_lang and p.to_code == self.target_lang),
-                     None)
-        if match is None:
-            raise RuntimeError(
-                f"Argos Translate не предоставляет пару {self.source_lang}->{self.target_lang}. "
-                f"Проверьте коды языков (ISO 639-1)."
-            )
-
-        try:
-            socket.setdefaulttimeout(_PACKAGE_DOWNLOAD_TIMEOUT_SECONDS)
-            download_path = match.download()
-        except OSError as e:
-            raise ArgosPackageSetupError(
-                f"Не удалось скачать языковой пакет Argos Translate {self.source_lang}->"
-                f"{self.target_lang} (нет интернета, он заблокирован, или соединение "
-                f"слишком медленное/оборвалось): {e}"
-            ) from e
-        finally:
-            socket.setdefaulttimeout(default_timeout)
-
-        package.install_from_path(download_path)
+    def _raise_language_not_bundled(self) -> None:
+        """Программа полностью офлайн: нет сетевого кода, нет скачивания
+        языковых пакетов ни при каких обстоятельствах. Пакет для этой пары
+        либо уже лежит в bundled_packages/ (см. _find_bundled_candidate) и
+        тогда до этой точки исполнение не доходит, либо его там нет — и
+        тогда единственный доступный пользователю выход прямо назван в
+        сообщении, без намёка на автоматическую докачку."""
+        raise ArgosPackageSetupError(
+            f"Языковой пакет Argos Translate {self.source_lang}->{self.target_lang} "
+            f"не найден среди встроенных в программу (bundled_packages/). Программа "
+            f"полностью офлайн и не скачивает ничего из интернета — чтобы добавить "
+            f"эту пару языков, скачайте пакет '{self.source_lang}_{self.target_lang}' "
+            f"вручную (например, с https://www.argosopentech.com/argospm/index/ или "
+            f"из репозитория Argos Translate на другом компьютере) и положите папку "
+            f"пакета в bundled_packages/ рядом с программой."
+        )
 
     _TRANSLATE_RETRY_DELAYS_SECONDS = (2, 5, 10, 20)
 
