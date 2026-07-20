@@ -419,3 +419,7 @@ agreement for glossary adjectives, and the heuristic for detecting
 translatable fields in `Defs/*.xml`. Two tests are intentionally marked
 `xfail` — they document known limits of the agreement heuristic (genitive
 plural, adjacency to a verb), not a bug to fix.
+
+## License
+
+[Apache License 2.0](LICENSE).
