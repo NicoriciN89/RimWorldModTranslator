@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.glossary import GlossaryContext, agree_adjectives
+from src.glossary import GLOSSARY, GlossaryContext, agree_adjectives
 
 
 def test_glossary_term_is_protected_and_restored() -> None:
@@ -80,6 +80,38 @@ def test_precept_matches_official_translation() -> None:
                           "падежи, родительный падеж мн.ч. 'труб' неотличим от м.р. ед.ч.")
 def test_agree_adjectives_genitive_plural_not_supported() -> None:
     assert agree_adjectives("10 труб усиленный") == "10 труб усиленные"
+
+
+@pytest.mark.parametrize("term,expected", [
+    ("shambler", "шамблер"),
+    ("metalhorror", "металлический ужас"),
+    ("fleshbeast", "плотезверь"),
+    ("revenant", "ревенант"),
+    ("entity", "сущность"),
+    ("bioferrite", "биоферрит"),
+    ("gorehulk", "кровавая громила"),
+])
+def test_anomaly_terms_are_glossary_protected(term: str, expected: str) -> None:
+    """Anomaly-специфичные термины отсутствовали в глоссарии вовсе — Argos
+    переводил "shambler"/"metalhorror" дословно или разваливал на куски
+    ("metal horror" -> "металл ужас"). Проверяем, что термин целиком
+    защищается и разворачивается в устоявшийся русский вариант."""
+    ctx = GlossaryContext()
+    protected = ctx.protect(f"a {term} appeared nearby")
+    assert term not in protected.lower()
+    restored = ctx.restore(protected)
+    assert expected in restored
+
+
+def test_generic_english_words_deliberately_excluded_from_anomaly_glossary() -> None:
+    """"study"/"activity"/"cult"/"containment" — тоже термины Anomaly, но
+    настолько общеупотребимые в английском (и в остальных текстах RimWorld:
+    "study" как комната, "activity" как досуг персонажа), что глоссарная
+    подмена дала бы больше ложных срабатываний на несвязанный текст, чем
+    пользы. Намеренно не добавлены — тест фиксирует это решение, чтобы
+    будущая правка не вернула их не глядя."""
+    for word in ("study", "activity", "cult", "containment"):
+        assert word not in GLOSSARY, f"{word!r} намеренно не должно быть в глоссарии"
 
 
 @pytest.mark.xfail(reason="Известное ограничение: эвристика не различает части речи, "
