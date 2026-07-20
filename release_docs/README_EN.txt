@@ -49,11 +49,13 @@ HOW TO USE
 2. Pick the target language from the dropdown. The program is fully offline
    and never downloads anything from the internet: Russian, Ukrainian,
    German, and French are bundled with it and work right away. For any
-   other language, you'll need to manually download the Argos Translate
-   package for that language pair (e.g. from
-   https://www.argosopentech.com/argospm/index/, or on another computer
-   with internet) and place the package folder into bundled_packages/ next
-   to the program.
+   other language: download it from the "language-packs" release on the
+   project's GitHub page (covers Spanish, Portuguese, Portuguese (Brazil),
+   Italian, Polish, Turkish, Chinese, Japanese, Korean — or get any other
+   language from https://www.argosopentech.com/argospm/index/), extract the
+   zip, and copy the resulting folder into the `_internal\bundled_packages`
+   folder next to RimWorldModTranslator.exe. Restart the program and the new
+   language appears in the dropdown.
 3. Translation engine:
    - "Только Argos (быстро)" (Argos only, fast) — plain offline translation,
      takes seconds. Works right away, nothing extra to install.

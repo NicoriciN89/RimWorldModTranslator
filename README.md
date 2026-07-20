@@ -56,21 +56,27 @@ dead import.
 ### Adding another language
 
 There is no download code in the program at all — for any language pair
-beyond the four bundled ones, you place the Argos Translate package folder
-yourself:
+beyond the four bundled ones, a language package has to be placed by hand.
+If a user selects a language with no matching package present, the program
+raises a clear error explaining that the pair isn't bundled and that it will
+never attempt to fetch one over the network.
 
-1. Get an Argos Translate package for the pair you want (`en->es`, for
-   example) — e.g. from https://www.argosopentech.com/argospm/index/, or by
-   installing it with `argostranslate` on another machine with internet and
-   copying the resulting folder from its packages directory.
-2. Drop that folder into `bundled_packages/` at the project root, alongside
-   `translate-en_ru-1_9` and the others.
-3. Rebuild the .exe (see below) — it will pick up the new package
-   automatically the same way it picks up the four bundled ones.
+**If you're using the pre-built .exe** (no rebuild needed): download the
+package for your language from the
+[language-packs release](https://github.com/NicoriciN89/RimWorldModTranslator/releases/tag/language-packs)
+in this repo, extract the zip, and copy the resulting `translate-en_XX-*`
+folder into `_internal\bundled_packages\` next to `RimWorldModTranslator.exe`
+(alongside the `translate-en_ru-1_9` folder already there). The next time you
+open the program, the new language shows up in the dropdown and works fully
+offline, same as the bundled ones. The `language-packs` release currently
+covers Spanish, Portuguese, Portuguese (Brazil), Italian, Polish, Turkish,
+Chinese, Japanese, and Korean; for anything else, get the package from
+https://www.argosopentech.com/argospm/index/ instead — same drop-in step.
 
-If a user selects a language with no matching package in `bundled_packages/`,
-the program raises a clear error explaining that the pair isn't bundled and
-that it will never attempt to fetch one over the network.
+**If you're building from source:** get an Argos Translate package the same
+way, then drop the folder into `bundled_packages/` at the project root
+(alongside `translate-en_ru-1_9`) before running `pyinstaller` — it gets
+picked up automatically the same way the four bundled ones are.
 
 The build takes a few minutes and currently produces a folder of roughly
 **736 MB** (four bundled language packages at ~150-215 MB each).
