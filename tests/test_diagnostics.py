@@ -56,11 +56,11 @@ def test_disk_info_reports_missing_path_without_raising(tmp_path: Path) -> None:
 
 def test_disk_info_includes_free_space_for_real_path(tmp_path: Path) -> None:
     result = _disk_info(tmp_path)
-    assert "ГБ" in result
+    assert "GB" in result
 
 
 def test_folder_access_reports_ok_for_writable_dir(tmp_path: Path) -> None:
-    assert _folder_access(tmp_path) == "чтение/запись в порядке"
+    assert _folder_access(tmp_path) == "read/write OK"
 
 
 def test_folder_access_reports_problem_for_unwritable_path(tmp_path: Path) -> None:
@@ -70,7 +70,7 @@ def test_folder_access_reports_problem_for_unwritable_path(tmp_path: Path) -> No
     ровно тот же код пути, что и при реальной проблеме с правами."""
     unwritable = tmp_path / "missing_parent" / "nested"
     result = _folder_access(unwritable)
-    assert "ПРОБЛЕМА" in result
+    assert "ACCESS PROBLEM" in result
 
 
 def test_log_environment_snapshot_does_not_raise_when_all_probes_fail(tmp_path: Path) -> None:

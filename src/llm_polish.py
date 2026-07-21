@@ -281,7 +281,7 @@ class LlmPolisher:
             "stream": False,
             "options": {"temperature": 0.2},
         }
-        log.debug("LLM-запрос: %s.%s (%.60s)", context.mod_name, context.field_key, original)
+        log.debug("LLM request: %s.%s (%.60s)", context.mod_name, context.field_key, original)
         started = time.monotonic()
         try:
             req = urllib.request.Request(
@@ -296,15 +296,15 @@ class LlmPolisher:
             elapsed = time.monotonic() - started
             answer = self._extract_answer(raw)
             if answer and not placeholders_preserved(original, answer):
-                log.warning("LLM повредила плейсхолдеры/разметку (%s.%s) — откат на черновик Argos",
+                log.warning("LLM corrupted placeholders/markup (%s.%s) — falling back to Argos draft",
                             context.mod_name, context.field_key)
                 answer = ""
-            log.debug("LLM-ответ за %.1fs: %s.%s -> %.60s",
-                      elapsed, context.mod_name, context.field_key, answer or "(пусто, откат на Argos)")
+            log.debug("LLM response in %.1fs: %s.%s -> %.60s",
+                      elapsed, context.mod_name, context.field_key, answer or "(empty, falling back to Argos)")
             return answer or draft
         except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
             elapsed = time.monotonic() - started
-            log.warning("LLM-запрос упал за %.1fs (%s.%s): %s — откат на черновик Argos",
+            log.warning("LLM request failed after %.1fs (%s.%s): %s — falling back to Argos draft",
                         elapsed, context.mod_name, context.field_key, e)
             return draft
 
@@ -356,7 +356,7 @@ class LlmPolisher:
                 "num_predict": max(_MIN_NUM_PREDICT, _NUM_PREDICT_PER_ITEM * len(to_send)),
             },
         }
-        log.debug("LLM-батч-запрос: %d строк (из них тривиальных пропущено: %d)",
+        log.debug("LLM batch request: %d lines (trivial skipped: %d)",
                   len(to_send), len(items) - len(to_send))
         started = time.monotonic()
         result = list(drafts)
@@ -373,23 +373,23 @@ class LlmPolisher:
             elapsed = time.monotonic() - started
             answers = self._extract_batch_answers(raw, len(to_send))
             if answers is None:
-                log.warning("LLM-батч за %.1fs: не удалось разобрать ответ на %d строк — откат на черновики",
+                log.warning("LLM batch after %.1fs: could not parse response for %d lines — falling back to drafts",
                             elapsed, len(to_send))
                 return result
-            log.debug("LLM-батч-ответ за %.1fs: %d строк разобрано", elapsed, len(to_send))
+            log.debug("LLM batch response in %.1fs: %d lines parsed", elapsed, len(to_send))
             for original_idx, answer in zip(send_indices, answers):
                 if not answer:
                     continue
                 original = items[original_idx][0]
                 if not placeholders_preserved(original, answer):
-                    log.warning("LLM повредила плейсхолдеры/разметку в батче (%.50s) — "
-                                "оставляю черновик Argos", original)
+                    log.warning("LLM corrupted placeholders/markup in batch (%.50s) — "
+                                "keeping Argos draft", original)
                     continue
                 result[original_idx] = answer
             return result
         except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
             elapsed = time.monotonic() - started
-            log.warning("LLM-батч-запрос упал за %.1fs (%d строк): %s — откат на черновики",
+            log.warning("LLM batch request failed after %.1fs (%d lines): %s — falling back to drafts",
                         elapsed, len(to_send), e)
             return result
 
@@ -492,7 +492,7 @@ class LlmPolisher:
                 "num_predict": max(_MIN_NUM_PREDICT, _NUM_PREDICT_PER_ITEM * len(to_send) // 2),
             },
         }
-        log.debug("LLM-проверка: %d строк (из них тривиальных пропущено: %d)",
+        log.debug("LLM check: %d lines (trivial skipped: %d)",
                   len(to_send), len(items) - len(to_send))
         started = time.monotonic()
         result = list(drafts)
@@ -508,21 +508,21 @@ class LlmPolisher:
             raw = data.get("response", "").strip()
             elapsed = time.monotonic() - started
             fixes = self._extract_check_fixes(raw)
-            log.debug("LLM-проверка за %.1fs: %d строк исправлено из %d",
+            log.debug("LLM check in %.1fs: %d of %d lines fixed",
                       elapsed, len(fixes), len(to_send))
             for local_num, fixed_text in fixes.items():
                 if not (1 <= local_num <= len(to_send)):
                     continue
                 original = to_send[local_num - 1][0]
                 if not placeholders_preserved(original, fixed_text):
-                    log.warning("LLM повредила плейсхолдеры/разметку при проверке (%.50s) — "
-                                "оставляю черновик Argos", original)
+                    log.warning("LLM corrupted placeholders/markup during check (%.50s) — "
+                                "keeping Argos draft", original)
                     continue
                 result[send_indices[local_num - 1]] = fixed_text
             return result
         except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
             elapsed = time.monotonic() - started
-            log.warning("LLM-проверка упала за %.1fs (%d строк): %s — откат на черновики",
+            log.warning("LLM check failed after %.1fs (%d lines): %s — falling back to drafts",
                         elapsed, len(to_send), e)
             return result
 

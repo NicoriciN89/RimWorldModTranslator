@@ -27,7 +27,7 @@ def load_settings() -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (ValueError, OSError) as e:
-        log.warning("Не удалось прочитать настройки %s: %s", path, e)
+        log.warning("Could not read settings %s: %s", path, e)
         return {}
 
 
@@ -39,4 +39,4 @@ def save_settings(data: dict) -> None:
                         encoding="utf-8")
     except OSError as e:
         # Настройки — удобство, не критичная функция: не роняем перевод.
-        log.warning("Не удалось сохранить настройки %s: %s", path, e)
+        log.warning("Could not save settings %s: %s", path, e)

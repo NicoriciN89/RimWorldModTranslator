@@ -63,10 +63,10 @@ def _disk_info(path: Path) -> str:
         free_gb = usage.free / (1024 ** 3)
         total_gb = usage.total / (1024 ** 3)
     except OSError as e:
-        return f"не удалось узнать свободное место ({e})"
+        return f"could not determine free space ({e})"
 
     drive = path.resolve().drive.rstrip(":")
-    fs_type = "неизвестно"
+    fs_type = "unknown"
     if drive:
         output = _run_powershell(
             f"Get-Volume -DriveLetter {drive} -ErrorAction SilentlyContinue | "
@@ -77,14 +77,14 @@ def _disk_info(path: Path) -> str:
                 fs_type = json.loads(output).get("FileSystem", fs_type)
             except (ValueError, AttributeError):
                 pass
-    return f"{free_gb:.1f} ГБ свободно из {total_gb:.1f} ГБ, файловая система {fs_type}"
+    return f"{free_gb:.1f} GB free out of {total_gb:.1f} GB, filesystem {fs_type}"
 
 
 def _windows_version() -> str:
     try:
         return f"{sys.getwindowsversion()}"  # type: ignore[attr-defined]
     except AttributeError:
-        return "не Windows или недоступно"
+        return "not Windows or unavailable"
 
 
 def _folder_access(path: Path) -> str:
@@ -94,29 +94,29 @@ def _folder_access(path: Path) -> str:
     try:
         probe.write_bytes(b"x")
         probe.unlink()
-        return "чтение/запись в порядке"
+        return "read/write OK"
     except OSError as e:
-        return f"ПРОБЛЕМА с доступом: {e}"
+        return f"ACCESS PROBLEM: {e}"
 
 
 def log_environment_snapshot(app_dir: Path) -> None:
     """Пишет один раз при старте программы блок с диагностикой окружения —
     антивирус, диск, версия Windows, права на папку программы. Не влияет на
     работу программы, только на содержимое лога."""
-    log.info("--- Диагностический снимок окружения ---")
-    log.info("Версия Windows: %s", _windows_version())
-    log.info("Папка программы: %s", app_dir)
-    log.info("Права доступа к папке программы: %s", _folder_access(app_dir))
-    log.info("Диск программы: %s", _disk_info(app_dir))
+    log.info("--- Environment diagnostic snapshot ---")
+    log.info("Windows version: %s", _windows_version())
+    log.info("Program folder: %s", app_dir)
+    log.info("Program folder access: %s", _folder_access(app_dir))
+    log.info("Program disk: %s", _disk_info(app_dir))
 
     products = _security_products()
     if products:
-        log.info("Активное защитное ПО: %s", ", ".join(products))
+        log.info("Active security software: %s", ", ".join(products))
     else:
-        log.info("Активное защитное ПО: не удалось определить через Windows Security Center "
-                 "(может быть недоступно, отключено политикой, либо антивирус не "
-                 "регистрируется в Security Center)")
-    log.info("--- Конец диагностического снимка ---")
+        log.info("Active security software: could not determine via Windows Security Center "
+                 "(may be unavailable, disabled by policy, or the antivirus does not "
+                 "register with Security Center)")
+    log.info("--- End of diagnostic snapshot ---")
 
 
 def log_model_file_probe(model_path: Path) -> None:
@@ -134,9 +134,9 @@ def log_model_file_probe(model_path: Path) -> None:
         with model_path.open("rb") as f:
             f.read(4096)
         elapsed = time.monotonic() - start
-        log.info("Проверка файла модели %s: открылся и прочитался за %.3fс (размер %s байт)",
+        log.info("Model file probe %s: opened and read in %.3fs (size %s bytes)",
                   model_path, elapsed, model_path.stat().st_size if model_path.exists() else "?")
     except OSError as e:
         elapsed = time.monotonic() - start
-        log.warning("Проверка файла модели %s: НЕ открылся за %.3fс перед сдачей — %s",
+        log.warning("Model file probe %s: FAILED to open after %.3fs — %s",
                     model_path, elapsed, e)

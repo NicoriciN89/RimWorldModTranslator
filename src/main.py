@@ -75,28 +75,28 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
     cancel_event — кооперативная отмена: при установке события перевод
     останавливается с TranslationCancelled, частичный результат на диске."""
     if not src.is_dir():
-        raise ValueError(f"Папка мода не найдена: {src}")
+        raise ValueError(f"Mod folder not found: {src}")
     if not use_argos and not use_llm:
-        raise ValueError("Нужен хотя бы один движок перевода: Argos или LLM.")
+        raise ValueError("At least one translation engine is required: Argos or LLM.")
     if llm_mode == LLM_MODE_CHECK and not use_argos:
-        raise ValueError('Режим LLM "check" (проверка ошибок Argos) требует включённый Argos.')
+        raise ValueError('LLM "check" mode (fixing Argos errors) requires Argos to be enabled.')
     if llm_batch_size is None:
         llm_batch_size = CHECK_BATCH_SIZE if llm_mode == LLM_MODE_CHECK else LLM_BATCH_SIZE
 
-    on_progress(0, 0, f"[1/4] Сканирую мод: {src}")
+    on_progress(0, 0, f"[1/4] Scanning mod: {src}")
     scan = scanner.scan_mod(src)
-    strings_note = f", Strings: {len(scan.strings)} файлов" if scan.strings else ""
+    strings_note = f", Strings: {len(scan.strings)} files" if scan.strings else ""
     if scan.source_lang_dir:
-        on_progress(0, 0, f"      Найден Languages/English — Keyed: {len(scan.keyed)} файлов, "
-                           f"DefInjected: {len(scan.def_injected)} файлов{strings_note}")
+        on_progress(0, 0, f"      Found Languages/English — Keyed: {len(scan.keyed)} files, "
+                           f"DefInjected: {len(scan.def_injected)} files{strings_note}")
     else:
-        on_progress(0, 0, f"      Languages/English отсутствует — извлекаю строки из Defs напрямую. "
-                           f"Сгенерировано DefInjected-файлов: {len(scan.def_injected)}")
+        on_progress(0, 0, f"      Languages/English is missing — extracting strings from Defs directly. "
+                           f"Generated DefInjected files: {len(scan.def_injected)}")
 
     all_tasks = list(scan.keyed) + list(scan.def_injected) + list(scan.strings)
     total_strings = sum(len(t.data.keyed_items()) for t in all_tasks)
     if total_strings == 0:
-        raise ValueError("Переводимых строк не найдено — проверьте, что это папка мода RimWorld.")
+        raise ValueError("No translatable strings found — make sure this is a RimWorld mod folder.")
 
     mod_name = src.name
     out_root = out_dir / f"{mod_name}_{target_lang.upper()}"
@@ -137,46 +137,46 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
     to_translate = total_strings - len(skipped_keys)
     skip_notes = []
     if reused_keys:
-        skip_notes.append(f"{len(reused_keys)} без изменений")
+        skip_notes.append(f"{len(reused_keys)} unchanged")
     if override_keys:
-        skip_notes.append(f"{len(override_keys)} ручных правок (см. {overrides.OVERRIDES_FILENAME})")
+        skip_notes.append(f"{len(override_keys)} manual edits (see {overrides.OVERRIDES_FILENAME})")
     if memory_keys:
-        skip_notes.append(f"{len(memory_keys)} из памяти переводов этой очереди")
+        skip_notes.append(f"{len(memory_keys)} from this batch's translation memory")
     if skip_notes:
-        on_progress(0, total_strings, f"[2/4] Пропущено: {', '.join(skip_notes)}; "
-                                       f"к переводу: {to_translate}.")
+        on_progress(0, total_strings, f"[2/4] Skipped: {', '.join(skip_notes)}; "
+                                       f"to translate: {to_translate}.")
     else:
-        on_progress(0, total_strings, f"[2/4] Всего строк к переводу: {total_strings}")
+        on_progress(0, total_strings, f"[2/4] Total strings to translate: {total_strings}")
 
     if use_argos and use_llm and llm_mode == LLM_MODE_CHECK:
-        engine_label = "Argos на 100%, затем LLM ищет и правит только ошибки"
+        engine_label = "Argos 100%, then LLM finds and fixes only errors"
     else:
         engine_label = {
-            (True, True): "Argos + LLM, двумя проходами",
-            (True, False): "только Argos",
-            (False, True): "только LLM",
+            (True, True): "Argos + LLM, two passes",
+            (True, False): "Argos only",
+            (False, True): "LLM only",
         }[(use_argos, use_llm)]
-    on_progress(0, total_strings, f"[3/4] Перевожу {source_lang} -> {target_lang} ({engine_label})...")
+    on_progress(0, total_strings, f"[3/4] Translating {source_lang} -> {target_lang} ({engine_label})...")
 
     engine = get_engine(source_lang, target_lang) if use_argos else None
     if engine is not None and not engine.is_ready():
         on_progress(0, total_strings,
-                    f"      Готовлю движок Argos для пары {source_lang}->{target_lang} "
-                    f"(из встроенных в программу файлов, без интернета)...")
+                    f"      Preparing the Argos engine for {source_lang}->{target_lang} "
+                    f"(from files bundled with the program, no internet)...")
         try:
             engine.ensure_ready()
         except ArgosPackageSetupError as e:
             raise ValueError(str(e)) from e
-        on_progress(0, total_strings, "      Движок Argos готов.")
+        on_progress(0, total_strings, "      Argos engine ready.")
     lang_name = LANG_HUMAN_NAMES.get(target_lang.lower(), target_lang)
     polisher = LlmPolisher(model=llm_model, lang_name=lang_name, enabled=use_llm)
 
     if use_llm:
         if polisher.is_available():
-            on_progress(0, total_strings, f"      LLM-доработка включена: Ollama/{llm_model} найдена.")
+            on_progress(0, total_strings, f"      LLM polishing enabled: Ollama/{llm_model} found.")
         else:
-            on_progress(0, total_strings, f"      LLM-доработка запрошена, но Ollama/{llm_model} "
-                                           f"недоступна — использую только доступный движок.")
+            on_progress(0, total_strings, f"      LLM polishing requested, but Ollama/{llm_model} "
+                                           f"is unavailable — using only the available engine.")
 
     entries_to_translate = [
         entry
@@ -198,17 +198,17 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
         if cancel_event is not None and cancel_event.is_set():
             flush_to_disk()
             raise TranslationCancelled(
-                f"Перевод отменён. Частичный результат сохранён в {out_root}")
+                f"Translation cancelled. Partial result saved to {out_root}")
 
     done = len(skipped_keys)
     on_progress(done, total_strings, "")
 
     if use_argos:
         pass_label = "[3a/4] Argos" if use_llm else "[3/4] Argos"
-        on_progress(done, total_strings, f"{pass_label}: перевожу черновик для {len(entries_to_translate)} строк...")
+        on_progress(done, total_strings, f"{pass_label}: translating a draft for {len(entries_to_translate)} strings...")
         for entry in entries_to_translate:
             check_cancel()
-            log.debug("[Argos %d/%d] перевожу %s", done + 1, total_strings, entry.key)
+            log.debug("[Argos %d/%d] translating %s", done + 1, total_strings, entry.key)
             entry.text = engine.translate(entry.text)
             done += 1
             on_progress(done, total_strings, "")
@@ -221,12 +221,12 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
         pass_label = "[3b/4] LLM" if use_argos else "[3/4] LLM"
         if is_check_mode:
             on_progress(done, total_strings,
-                        f"{pass_label}: ищу и исправляю ошибки Argos через {llm_model} "
-                        f"(пачками по {llm_batch_size}, до {llm_parallel_requests} запросов параллельно)...")
+                        f"{pass_label}: finding and fixing Argos errors via {llm_model} "
+                        f"(batches of {llm_batch_size}, up to {llm_parallel_requests} requests in parallel)...")
         else:
             on_progress(done, total_strings,
-                        f"{pass_label}: дорабатываю {len(entries_to_translate)} строк через {llm_model} "
-                        f"(пачками по {llm_batch_size}, до {llm_parallel_requests} запросов параллельно)...")
+                        f"{pass_label}: polishing {len(entries_to_translate)} strings via {llm_model} "
+                        f"(batches of {llm_batch_size}, up to {llm_parallel_requests} requests in parallel)...")
 
         progress_lock = threading.Lock()
         done_box = [done]
@@ -261,7 +261,7 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
         # (а в режиме "только LLM" — вообще на числе переиспользованных строк).
         done = done_box[0]
 
-    on_progress(done, total_strings, f"[4/4] Дописываю мод-русификатор: {out_root}")
+    on_progress(done, total_strings, f"[4/4] Writing the translated mod: {out_root}")
 
     flush_to_disk()
     incremental.save_cache(out_root, english_by_key)
@@ -272,7 +272,7 @@ def translate_mod(src: Path, out_dir: Path, source_lang: str, target_lang: str,
     if memory is not None:
         memory.update({english_by_key[e.key]: e.text for e in all_entries})
 
-    on_progress(done, total_strings, f"Готово: {out_root}")
+    on_progress(done, total_strings, f"Done: {out_root}")
     return out_root
 
 
@@ -317,15 +317,15 @@ def main() -> None:
     from .diagnostics import log_environment_snapshot
     from .log_setup import setup_logging
     log_path = setup_logging()
-    log.info("=== CLI-запуск: %s ===", vars(args))
+    log.info("=== CLI run: %s ===", vars(args))
     log_environment_snapshot(log_path.parent)
-    safe_print(f"Лог: {log_path}", file=sys.stderr)
+    safe_print(f"Log: {log_path}", file=sys.stderr)
 
     memory: dict[str, str] = {}
     try:
         for i, src in enumerate(args.src, 1):
             if len(args.src) > 1:
-                safe_print(f"=== Мод {i}/{len(args.src)}: {src.name} ===", file=sys.stderr)
+                safe_print(f"=== Mod {i}/{len(args.src)}: {src.name} ===", file=sys.stderr)
             translate_mod(src.resolve(), args.out.resolve(), args.source_lang, args.lang,
                            use_llm=args.llm, llm_model=args.llm_model,
                            use_argos=not args.no_argos, update=args.update,
@@ -333,10 +333,10 @@ def main() -> None:
                            with_original_comments=args.with_original_comments, llm_mode=args.llm_mode,
                            memory=memory)
     except (ValueError, TranslationCancelled) as e:
-        log.error("Перевод прерван: %s", e)
+        log.error("Translation interrupted: %s", e)
         raise SystemExit(str(e))
     except Exception:
-        log.exception("Необработанное исключение в CLI")
+        log.exception("Unhandled exception in CLI")
         raise
     safe_print()
 

@@ -67,7 +67,7 @@ def harvest_manual_edits(out_root: Path, lang_dir_name: str) -> dict[str, str]:
             if key in snapshot and text != snapshot[key]
         }
         if harvested:
-            log.info("Обнаружено %d ручных правок в файлах перевода — сохраняю в %s",
+            log.info("Found %d manual edits in translation files — saving to %s",
                      len(harvested), OVERRIDES_FILENAME)
             overrides.update(harvested)
             _save_json(overrides_path, overrides)

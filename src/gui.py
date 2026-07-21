@@ -417,7 +417,7 @@ class TranslatorApp:
         total_mods = len(mod_paths)
         memory: dict[str, str] = {}
 
-        log.info("=== Запуск перевода: mods=%s out=%s lang=%s argos=%s llm=%s(%s, mode=%s) update=%s comments=%s ===",
+        log.info("=== Starting translation: mods=%s out=%s lang=%s argos=%s llm=%s(%s, mode=%s) update=%s comments=%s ===",
                   [str(p) for p in mod_paths], out_path, lang_code, use_argos, use_llm,
                   llm_model, llm_mode, update, with_original_comments)
 
@@ -441,14 +441,14 @@ class TranslatorApp:
                     with_original_comments=with_original_comments, llm_mode=llm_mode,
                     memory=memory, cancel_event=cancel_event,
                 )
-                log.info("Готово: %s", result)
+                log.info("Done: %s", result)
                 results.append(str(result))
             except main_module.TranslationCancelled as e:
-                log.info("Отменено пользователем: %s", e)
+                log.info("Cancelled by user: %s", e)
                 self._queue.put(("cancelled", str(e)))
                 return
             except Exception as e:
-                log.error("Перевод %s упал с ошибкой: %s\n%s", mod_path, e, traceback.format_exc())
+                log.error("Translation of %s failed: %s\n%s", mod_path, e, traceback.format_exc())
                 errors.append(f"{mod_path.name}: {e}")
                 # Пакетный режим: ошибка одного мода не роняет всю очередь.
                 continue
@@ -511,7 +511,7 @@ class TranslatorApp:
 
 def main() -> None:
     log_path = setup_logging()
-    log.info("=== RimWorld Mod Translator v%s запущен, лог: %s ===", __version__, log_path)
+    log.info("=== RimWorld Mod Translator v%s started, log: %s ===", __version__, log_path)
     # В фоновом потоке: опрос WMI/PowerShell (антивирус, диск) занимает
     # секунды из-за холодного старта powershell.exe — блокировать этим
     # появление окна не стоит, а к моменту, когда лог понадобится для

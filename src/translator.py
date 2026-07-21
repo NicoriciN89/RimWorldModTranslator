@@ -164,8 +164,8 @@ def _repair_bundled_package_if_broken(source_lang: str, target_lang: str) -> boo
     if not dest_dir.is_dir() or _bundled_copy_is_intact(candidate, dest_dir):
         return False
 
-    log.warning("Встроенный пакет Argos %s->%s скопирован не полностью (%s) — "
-                "переустанавливаю", source_lang, target_lang, dest_dir)
+    log.warning("Bundled Argos package %s->%s was copied incompletely (%s) — "
+                "reinstalling", source_lang, target_lang, dest_dir)
     shutil.rmtree(dest_dir)
     _copy_bundled_package_or_raise(candidate, dest_dir, source_lang, target_lang)
     return True
@@ -194,7 +194,7 @@ def _install_bundled_package(source_lang: str, target_lang: str) -> bool:
             return True
         shutil.rmtree(dest_dir)
     else:
-        log.info("Устанавливаю встроенный пакет Argos %s->%s из %s (без скачивания)",
+        log.info("Installing bundled Argos package %s->%s from %s (no download)",
                   source_lang, target_lang, candidate)
     _copy_bundled_package_or_raise(candidate, dest_dir, source_lang, target_lang)
     return True
@@ -261,7 +261,7 @@ def _install_bundled_minisbd_models() -> None:
         # запуска (та же причина, что у _bundled_copy_is_intact выше —
         # антивирус временно блокирует свежераспакованные файлы) — размер
         # не совпадёт, и copy2 просто перезапишет его целиком.
-        log.info("Устанавливаю встроенную модель сегментации MiniSBD: %s", model.name)
+        log.info("Installing bundled MiniSBD segmentation model: %s", model.name)
         dest_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(model, dest)
 
@@ -383,8 +383,8 @@ class TranslationEngine:
             except OSError as e:
                 last_error = e
                 if attempt < len(self._TRANSLATE_RETRY_DELAYS_SECONDS):
-                    log.warning("Вызов перевода упал с OSError (%s) — похоже, файл модели "
-                                "временно заблокирован (антивирус?). Жду %sс и пробую ещё раз.",
+                    log.warning("Translation call failed with OSError (%s) — the model file "
+                                "looks temporarily locked (antivirus?). Waiting %ss and retrying.",
                                 e, self._TRANSLATE_RETRY_DELAYS_SECONDS[attempt])
         model_path = self._model_file_path()
         if model_path is not None:
