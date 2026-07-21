@@ -17,3 +17,4 @@ translator.log
 # собранный exe скачивал бы её из интернета при первом запуске.
 bundled_packages/*
 !bundled_packages/minisbd/
+release/

@@ -16,6 +16,7 @@ from tkinter import ttk
 
 from . import __version__, generator, main as main_module
 from .diagnostics import log_environment_snapshot
+from .i18n import SUPPORTED_UI_LANGUAGES, Translator, detect_system_ui_language
 from .llm_polish import DEFAULT_MODEL, list_installed_models
 from .log_setup import get_logger, setup_logging
 from .settings import load_settings, save_settings
@@ -40,36 +41,35 @@ def _default_mods_dir() -> str:
     return ""
 
 
-ENGINE_ARGOS_ONLY = "Только Argos (быстро)"
-ENGINE_LLM_ONLY = "Только LLM (медленно, качественнее)"
-ENGINE_BOTH = "Argos + LLM-доработка (рекомендовано)"
-ENGINE_BOTH_CHECK = "Argos + LLM-проверка ошибок (быстрее)"
+# Стабильные внутренние идентификаторы движка перевода — НЕ показываются
+# пользователю напрямую (для этого есть i18n.t(ENGINE_I18N_KEYS[x])); хранятся
+# в settings.json, поэтому должны переживать смену языка интерфейса и не
+# зависеть от того, на каком языке был текст на момент сохранения.
+ENGINE_ARGOS_ONLY = "argos_only"
+ENGINE_LLM_ONLY = "llm_only"
+ENGINE_BOTH = "both"
+ENGINE_BOTH_CHECK = "both_check"
 ENGINES = [ENGINE_ARGOS_ONLY, ENGINE_BOTH, ENGINE_BOTH_CHECK, ENGINE_LLM_ONLY]
+ENGINE_I18N_KEYS = {
+    ENGINE_ARGOS_ONLY: "engine_argos_only",
+    ENGINE_LLM_ONLY: "engine_llm_only",
+    ENGINE_BOTH: "engine_both",
+    ENGINE_BOTH_CHECK: "engine_both_check",
+}
 
-LANGUAGES = [
-    ("Русский", "ru"),
-    ("Украинский", "uk"),
-    ("Немецкий", "de"),
-    ("Французский", "fr"),
-    ("Испанский", "es"),
-    ("Итальянский", "it"),
-    ("Польский", "pl"),
-    ("Португальский", "pt"),
-    ("Китайский (упрощ.)", "zh"),
-    ("Японский", "ja"),
-    ("Корейский", "ko"),
-    ("Чешский", "cs"),
-    ("Нидерландский", "nl"),
-    ("Турецкий", "tr"),
+# Языки ПЕРЕВОДА МОДА (не интерфейса программы — см. i18n.py для того) — код
+# ISO 639-1 хранится в settings.json, а отображаемое название всегда
+# смотрится через i18n.t("lang_" + code) на текущем языке интерфейса.
+TRANSLATION_LANGUAGE_CODES = [
+    "ru", "uk", "de", "fr", "es", "it", "pl", "pt", "zh", "ja", "ko", "cs", "nl", "tr",
 ]
 
 
 class TranslatorApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
-        self.root.title(f"RimWorld Mod Translator v{__version__}")
-        self.root.geometry("580x560")
-        self.root.minsize(520, 480)
+        self.root.geometry("580x600")
+        self.root.minsize(520, 520)
 
         self._queue: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
@@ -79,9 +79,14 @@ class TranslatorApp:
         self.mod_path = self._settings.get("mod_path", "")
         self.out_path = self._settings.get("out_path", str(Path.cwd() / "output"))
 
+        saved_ui_lang = self._settings.get("ui_language")
+        ui_lang = saved_ui_lang if saved_ui_lang else detect_system_ui_language()
+        self._t = Translator(ui_lang)
+
         self._build_widgets()
         self._apply_saved_settings()
         self._update_model_row_state()
+        self._retranslate_ui()
         self.root.after(100, self._poll_queue)
         self._refresh_models()
 
@@ -91,13 +96,13 @@ class TranslatorApp:
         на значениях по умолчанию."""
         if self.mod_path:
             self.mod_entry.insert(0, self.mod_path)
-        lang = self._settings.get("lang")
-        lang_names = [name for name, _ in LANGUAGES]
-        if lang in lang_names:
-            self.lang_var.current(lang_names.index(lang))
+        lang_code = self._settings.get("lang_code")
+        if lang_code in TRANSLATION_LANGUAGE_CODES:
+            self._lang_code = lang_code
+        else:
+            self._lang_code = TRANSLATION_LANGUAGE_CODES[0]
         engine = self._settings.get("engine")
-        if engine in ENGINES:
-            self.engine_var.current(ENGINES.index(engine))
+        self._engine_code = engine if engine in ENGINES else ENGINE_ARGOS_ONLY
         model = self._settings.get("model")
         if model:
             self.model_var.set(model)
@@ -108,11 +113,12 @@ class TranslatorApp:
         save_settings({
             "mod_path": self.mod_entry.get().strip(),
             "out_path": self.out_entry.get().strip(),
-            "lang": self.lang_var.get(),
-            "engine": self.engine_var.get(),
+            "lang_code": self._lang_code,
+            "engine": self._engine_code,
             "model": self.model_var.get(),
             "update": self.update_var.get(),
             "comments": self.original_comments_var.get(),
+            "ui_language": self._t.language,
         })
 
     def _build_widgets(self) -> None:
@@ -121,15 +127,32 @@ class TranslatorApp:
         frame = ttk.Frame(self.root)
         frame.pack(fill=BOTH, expand=True, **pad)
 
+        # Язык интерфейса — отдельно сверху, чтобы сразу бросался в глаза.
+        ui_lang_row = ttk.Frame(frame)
+        ui_lang_row.pack(fill=X, pady=(0, 8))
+        self.ui_lang_label = ttk.Label(ui_lang_row)
+        self.ui_lang_label.pack(side=LEFT)
+        self._ui_lang_names = [name for name, _ in SUPPORTED_UI_LANGUAGES]
+        self._ui_lang_codes = [code for _, code in SUPPORTED_UI_LANGUAGES]
+        self.ui_lang_var = ttk.Combobox(ui_lang_row, values=self._ui_lang_names,
+                                        state="readonly", width=16)
+        current_ui_idx = self._ui_lang_codes.index(self._t.language) \
+            if self._t.language in self._ui_lang_codes else 0
+        self.ui_lang_var.current(current_ui_idx)
+        self.ui_lang_var.bind("<<ComboboxSelected>>", self._on_ui_language_changed)
+        self.ui_lang_var.pack(side=LEFT, padx=(6, 0))
+
         # Папка мода
         mod_row = ttk.Frame(frame)
         mod_row.pack(fill=X, pady=4)
-        ttk.Label(mod_row, text="Папка мода:").pack(anchor="w")
+        self.mod_folder_label = ttk.Label(mod_row)
+        self.mod_folder_label.pack(anchor="w")
         path_row = ttk.Frame(mod_row)
         path_row.pack(fill=X, pady=2)
         self.mod_entry = ttk.Entry(path_row)
         self.mod_entry.pack(side=LEFT, fill=X, expand=True)
-        ttk.Button(path_row, text="Обзор...", command=self._pick_mod_folder).pack(side=LEFT, padx=(6, 0))
+        self.mod_browse_btn = ttk.Button(path_row, command=self._pick_mod_folder)
+        self.mod_browse_btn.pack(side=LEFT, padx=(6, 0))
 
         self.mod_info_label = ttk.Label(frame, text="", foreground="#666")
         self.mod_info_label.pack(fill=X, pady=(0, 6))
@@ -139,99 +162,141 @@ class TranslatorApp:
         # если очередь пуста — переводится мод из поля выше, как раньше.
         queue_row = ttk.Frame(frame)
         queue_row.pack(fill=X, pady=(0, 4))
-        ttk.Label(queue_row, text="Очередь модов (необязательно):").pack(anchor="w")
+        self.mod_queue_label = ttk.Label(queue_row)
+        self.mod_queue_label.pack(anchor="w")
         queue_inner = ttk.Frame(queue_row)
         queue_inner.pack(fill=X, pady=2)
         self.queue_list = Listbox(queue_inner, height=3)
         self.queue_list.pack(side=LEFT, fill=X, expand=True)
         queue_btns = ttk.Frame(queue_inner)
         queue_btns.pack(side=LEFT, padx=(6, 0))
-        ttk.Button(queue_btns, text="Добавить", command=self._add_to_queue).pack(fill=X)
-        ttk.Button(queue_btns, text="Убрать", command=self._remove_from_queue).pack(fill=X, pady=(4, 0))
+        self.queue_add_btn = ttk.Button(queue_btns, command=self._add_to_queue)
+        self.queue_add_btn.pack(fill=X)
+        self.queue_remove_btn = ttk.Button(queue_btns, command=self._remove_from_queue)
+        self.queue_remove_btn.pack(fill=X, pady=(4, 0))
 
         # Папка вывода
         out_row = ttk.Frame(frame)
         out_row.pack(fill=X, pady=4)
-        ttk.Label(out_row, text="Куда сохранить перевод:").pack(anchor="w")
+        self.output_folder_label = ttk.Label(out_row)
+        self.output_folder_label.pack(anchor="w")
         out_path_row = ttk.Frame(out_row)
         out_path_row.pack(fill=X, pady=2)
         self.out_entry = ttk.Entry(out_path_row)
         self.out_entry.insert(0, self.out_path)
         self.out_entry.pack(side=LEFT, fill=X, expand=True)
-        ttk.Button(out_path_row, text="Обзор...", command=self._pick_out_folder).pack(side=LEFT, padx=(6, 0))
+        self.out_browse_btn = ttk.Button(out_path_row, command=self._pick_out_folder)
+        self.out_browse_btn.pack(side=LEFT, padx=(6, 0))
 
-        # Язык
+        # Язык перевода мода
         lang_row = ttk.Frame(frame)
         lang_row.pack(fill=X, pady=8)
-        ttk.Label(lang_row, text="Язык перевода:").pack(side=LEFT)
-        self.lang_var = ttk.Combobox(lang_row, values=[name for name, _ in LANGUAGES], state="readonly", width=25)
-        self.lang_var.current(0)
+        self.translation_language_label = ttk.Label(lang_row)
+        self.translation_language_label.pack(side=LEFT)
+        self.lang_var = ttk.Combobox(lang_row, state="readonly", width=25)
+        self.lang_var.bind("<<ComboboxSelected>>", self._on_translation_language_changed)
         self.lang_var.pack(side=LEFT, padx=(6, 0))
 
         # Движок перевода
         engine_row = ttk.Frame(frame)
         engine_row.pack(fill=X, pady=(4, 2))
-        ttk.Label(engine_row, text="Движок перевода:").pack(side=LEFT)
-        self.engine_var = ttk.Combobox(engine_row, values=ENGINES, state="readonly", width=32)
-        self.engine_var.current(0)
-        self.engine_var.bind("<<ComboboxSelected>>", lambda e: self._update_model_row_state())
+        self.translation_engine_label = ttk.Label(engine_row)
+        self.translation_engine_label.pack(side=LEFT)
+        self.engine_var = ttk.Combobox(engine_row, state="readonly", width=32)
+        self.engine_var.bind("<<ComboboxSelected>>", self._on_engine_changed)
         self.engine_var.pack(side=LEFT, padx=(6, 0))
 
         # Модель LLM (активна только если движок использует LLM)
         model_row = ttk.Frame(frame)
         model_row.pack(fill=X, pady=(0, 4))
-        ttk.Label(model_row, text="Модель Ollama:").pack(side=LEFT)
+        self.ollama_model_label = ttk.Label(model_row)
+        self.ollama_model_label.pack(side=LEFT)
         self.model_var = ttk.Combobox(model_row, values=[DEFAULT_MODEL], state="disabled", width=24)
         self.model_var.current(0)
         self.model_var.pack(side=LEFT, padx=(6, 0))
-        self.refresh_models_btn = ttk.Button(model_row, text="Обновить список", command=self._refresh_models)
+        self.refresh_models_btn = ttk.Button(model_row, command=self._refresh_models)
         self.refresh_models_btn.pack(side=LEFT, padx=(6, 0))
 
         # Режим обновления
         self.update_var = BooleanVar(value=False)
         update_row = ttk.Frame(frame)
         update_row.pack(fill=X, pady=(0, 4))
-        ttk.Checkbutton(
-            update_row,
-            text="Режим обновления: переводить только новые/изменённые строки "
-                 "(если в папке вывода уже есть перевод)",
-            variable=self.update_var,
-        ).pack(side=LEFT)
+        self.update_mode_check = ttk.Checkbutton(update_row, variable=self.update_var)
+        self.update_mode_check.pack(side=LEFT)
 
         # Комментарии с оригиналом
         self.original_comments_var = BooleanVar(value=False)
         comments_row = ttk.Frame(frame)
         comments_row.pack(fill=X, pady=(0, 4))
-        ttk.Checkbutton(
-            comments_row,
-            text="Добавлять в файлы перевода комментарий с оригинальным английским текстом (для сверки)",
-            variable=self.original_comments_var,
-        ).pack(side=LEFT)
+        self.original_comments_check = ttk.Checkbutton(
+            comments_row, variable=self.original_comments_var)
+        self.original_comments_check.pack(side=LEFT)
 
         # Кнопки
         btn_row = ttk.Frame(frame)
         btn_row.pack(pady=10)
-        self.translate_btn = ttk.Button(btn_row, text="Перевести", command=self._start_translation)
+        self.translate_btn = ttk.Button(btn_row, command=self._start_translation)
         self.translate_btn.pack(side=LEFT)
-        self.cancel_btn = ttk.Button(btn_row, text="Отмена", command=self._cancel_translation,
-                                     state=DISABLED)
+        self.cancel_btn = ttk.Button(btn_row, command=self._cancel_translation, state=DISABLED)
         self.cancel_btn.pack(side=LEFT, padx=(8, 0))
 
         # Прогресс
         self.progress = ttk.Progressbar(frame, orient=HORIZONTAL, mode="determinate")
         self.progress.pack(fill=X, pady=4)
 
-        self.status_label = ttk.Label(frame, text="Готов к работе.", wraplength=520, justify=LEFT)
+        self.status_label = ttk.Label(frame, wraplength=520, justify=LEFT)
         self.status_label.pack(fill=X, pady=4)
+
+        self.log_hint_label = ttk.Label(frame, foreground="#888", wraplength=520, justify=LEFT)
+        self.log_hint_label.pack(fill=X, pady=(0, 4))
+
+    def _on_ui_language_changed(self, _event=None) -> None:
+        idx = self.ui_lang_var.current()
+        self._t.set_language(self._ui_lang_codes[idx])
+        self._retranslate_ui()
+
+    def _retranslate_ui(self) -> None:
+        """Переприменяет текст всех виджетов на текущем языке интерфейса —
+        вызывается при старте и при каждой смене языка в комбобоксе, без
+        необходимости перезапускать программу."""
+        t = self._t.t
+        self.root.title(t("window_title", version=__version__))
+        self.ui_lang_label.config(text=t("ui_language"))
+        self.mod_folder_label.config(text=t("mod_folder"))
+        self.mod_browse_btn.config(text=t("browse"))
+        self.mod_queue_label.config(text=t("mod_queue"))
+        self.queue_add_btn.config(text=t("add"))
+        self.queue_remove_btn.config(text=t("remove"))
+        self.output_folder_label.config(text=t("output_folder"))
+        self.out_browse_btn.config(text=t("browse"))
+        self.translation_language_label.config(text=t("translation_language"))
+        self.translation_engine_label.config(text=t("translation_engine"))
+        self.ollama_model_label.config(text=t("ollama_model"))
+        self.update_mode_check.config(text=t("update_mode"))
+        self.original_comments_check.config(text=t("original_comments"))
+        self.translate_btn.config(text=t("translate"))
+        self.cancel_btn.config(text=t("cancel"))
+        self.status_label.config(text=t("ready"))
+
+        # Комбобоксы с переводимыми названиями — переприменяем список
+        # значений на новом языке, сохраняя текущий выбор по стабильному коду.
+        lang_names = [t(f"lang_{code}") for code in TRANSLATION_LANGUAGE_CODES]
+        self.lang_var.config(values=lang_names)
+        self.lang_var.current(TRANSLATION_LANGUAGE_CODES.index(self._lang_code))
+
+        engine_names = [t(ENGINE_I18N_KEYS[code]) for code in ENGINES]
+        self.engine_var.config(values=engine_names)
+        self.engine_var.current(ENGINES.index(self._engine_code))
+
+        self.refresh_models_btn.config(text=t("refresh_list"))
 
         log_path = Path(logging.getLogger("rmt").handlers[0].baseFilename) \
             if logging.getLogger("rmt").handlers else None
-        log_hint = f"Подробный лог: {log_path}" if log_path else ""
-        ttk.Label(frame, text=log_hint, foreground="#888", wraplength=520, justify=LEFT).pack(fill=X, pady=(0, 4))
+        self.log_hint_label.config(text=t("detailed_log", path=log_path) if log_path else "")
 
     def _pick_mod_folder(self) -> None:
         path = filedialog.askdirectory(
-            title="Выберите папку мода (там, где About/About.xml)",
+            title=self._t.t("pick_mod_folder_title"),
             initialdir=_default_mods_dir(),
         )
         if not path:
@@ -243,12 +308,12 @@ class TranslatorApp:
     def _describe_mod(self, mod_path: Path) -> None:
         info = generator.read_original_about(mod_path)
         if info.name:
-            self.mod_info_label.config(text=f"Обнаружен мод: {info.name}")
+            self.mod_info_label.config(text=self._t.t("mod_detected", name=info.name))
         else:
-            self.mod_info_label.config(text="About.xml не найден — проверьте, что это папка мода RimWorld.")
+            self.mod_info_label.config(text=self._t.t("about_not_found"))
 
     def _pick_out_folder(self) -> None:
-        path = filedialog.askdirectory(title="Куда сохранить перевод")
+        path = filedialog.askdirectory(title=self._t.t("pick_output_title"))
         if not path:
             return
         self.out_entry.delete(0, END)
@@ -260,13 +325,14 @@ class TranslatorApp:
         path = self.mod_entry.get().strip()
         if not path:
             path = filedialog.askdirectory(
-                title="Выберите папку мода для очереди", initialdir=_default_mods_dir())
+                title=self._t.t("pick_mod_for_queue_title"), initialdir=_default_mods_dir())
             if not path:
                 return
         if path in self.queue_list.get(0, END):
             return
         if not Path(path).is_dir():
-            messagebox.showwarning("Папка не найдена", f"Папка не существует:\n{path}")
+            messagebox.showwarning(self._t.t("folder_not_found_title"),
+                                   self._t.t("folder_not_found_body", path=path))
             return
         self.queue_list.insert(END, path)
 
@@ -278,10 +344,17 @@ class TranslatorApp:
         if self._cancel_event is not None:
             self._cancel_event.set()
             self.cancel_btn.config(state=DISABLED)
-            self.status_label.config(text="Останавливаю... (дожидаюсь текущей строки/пачки)")
+            self.status_label.config(text=self._t.t("cancelling"))
+
+    def _on_translation_language_changed(self, _event=None) -> None:
+        self._lang_code = TRANSLATION_LANGUAGE_CODES[self.lang_var.current()]
+
+    def _on_engine_changed(self, _event=None) -> None:
+        self._engine_code = ENGINES[self.engine_var.current()]
+        self._update_model_row_state()
 
     def _update_model_row_state(self) -> None:
-        uses_llm = self.engine_var.get() != ENGINE_ARGOS_ONLY
+        uses_llm = self._engine_code != ENGINE_ARGOS_ONLY
         self.model_var.config(state="readonly" if uses_llm else "disabled")
         self.refresh_models_btn.config(state=NORMAL if uses_llm else DISABLED)
 
@@ -290,7 +363,7 @@ class TranslatorApp:
             models = list_installed_models()
             self._queue.put(("models", models))
 
-        self.refresh_models_btn.config(text="Ищу модели...")
+        self.refresh_models_btn.config(text=self._t.t("searching_models"))
         threading.Thread(target=worker, daemon=True).start()
 
     def _start_translation(self) -> None:
@@ -303,18 +376,18 @@ class TranslatorApp:
         mod_paths = [Path(p) for p in queued] if queued else \
             ([Path(mod_path_str)] if mod_path_str else [])
         if not mod_paths:
-            messagebox.showwarning("Не выбрана папка",
-                                   "Укажите папку мода или добавьте моды в очередь.")
+            messagebox.showwarning(self._t.t("no_folder_selected_title"),
+                                   self._t.t("no_mod_selected_body"))
             return
         if not out_path_str:
-            messagebox.showwarning("Не выбрана папка", "Укажите папку для сохранения результата.")
+            messagebox.showwarning(self._t.t("no_folder_selected_title"),
+                                   self._t.t("no_output_selected_body"))
             return
 
         out_path = Path(out_path_str)
-        lang_name = self.lang_var.get()
-        lang_code = next(code for name, code in LANGUAGES if name == lang_name)
+        lang_code = self._lang_code
 
-        engine = self.engine_var.get()
+        engine = self._engine_code
         use_argos = engine != ENGINE_LLM_ONLY
         use_llm = engine != ENGINE_ARGOS_ONLY
         llm_mode = main_module.LLM_MODE_CHECK if engine == ENGINE_BOTH_CHECK else main_module.LLM_MODE_REWRITE
@@ -327,7 +400,7 @@ class TranslatorApp:
         self.translate_btn.config(state=DISABLED)
         self.cancel_btn.config(state=NORMAL)
         self.progress.config(value=0, maximum=100)
-        self.status_label.config(text="Запускаю перевод...")
+        self.status_label.config(text=self._t.t("starting_translation"))
 
         self._worker = threading.Thread(
             target=self._run_translation,
@@ -351,7 +424,7 @@ class TranslatorApp:
         results: list[str] = []
         errors: list[str] = []
         for i, mod_path in enumerate(mod_paths, 1):
-            prefix = f"[мод {i}/{total_mods}] " if total_mods > 1 else ""
+            prefix = f"[{i}/{total_mods}] " if total_mods > 1 else ""
 
             def on_progress(done: int, total: int, message: str, _prefix: str = prefix) -> None:
                 if message:
@@ -381,8 +454,7 @@ class TranslatorApp:
                 continue
 
         if errors and results:
-            self._queue.put(("done", "Готово: " + "\n".join(results) +
-                              "\n\nС ошибками:\n" + "\n".join(errors)))
+            self._queue.put(("done_with_errors", results, errors))
         elif errors:
             self._queue.put(("error", "\n".join(errors)))
         else:
@@ -393,6 +465,7 @@ class TranslatorApp:
             while True:
                 item = self._queue.get_nowait()
                 kind = item[0]
+                t = self._t.t
                 if kind == "progress":
                     _, done, total, message = item
                     if total > 0:
@@ -401,22 +474,29 @@ class TranslatorApp:
                         self.status_label.config(text=message)
                 elif kind == "done":
                     out_dir = item[1]
-                    self.status_label.config(text=f"Готово! Перевод сохранён в:\n{out_dir}")
+                    self.status_label.config(text=t("done_saved_to", path=out_dir))
                     self.translate_btn.config(state=NORMAL)
                     self.cancel_btn.config(state=DISABLED)
-                    messagebox.showinfo("Готово", f"Перевод завершён:\n{out_dir}")
+                    messagebox.showinfo(t("done_title"), t("done_saved_to", path=out_dir))
+                elif kind == "done_with_errors":
+                    results, errors = item[1], item[2]
+                    body = t("done_saved_to", path="\n".join(results)) + "\n\n" + "\n".join(errors)
+                    self.status_label.config(text=body)
+                    self.translate_btn.config(state=NORMAL)
+                    self.cancel_btn.config(state=DISABLED)
+                    messagebox.showinfo(t("done_title"), body)
                 elif kind == "cancelled":
-                    self.status_label.config(text=f"Отменено. {item[1]}")
+                    self.status_label.config(text=t("cancelled", reason=item[1]))
                     self.translate_btn.config(state=NORMAL)
                     self.cancel_btn.config(state=DISABLED)
                 elif kind == "error":
-                    self.status_label.config(text="Произошла ошибка — см. окно сообщения.")
+                    self.status_label.config(text=t("error_occurred"))
                     self.translate_btn.config(state=NORMAL)
                     self.cancel_btn.config(state=DISABLED)
-                    messagebox.showerror("Ошибка перевода", item[1])
+                    messagebox.showerror(t("translation_error_title"), item[1])
                 elif kind == "models":
                     models = item[1]
-                    self.refresh_models_btn.config(text="Обновить список")
+                    self.refresh_models_btn.config(text=t("refresh_list"))
                     if models:
                         current = self.model_var.get()
                         self.model_var.config(values=models)
