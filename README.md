@@ -63,7 +63,7 @@ never attempt to fetch one over the network.
 
 **If you're using the pre-built .exe** (no rebuild needed): download the
 package for your language from the
-[language-packs release](https://github.com/NicoriciN89/RimWorldModTranslator/releases/tag/language-packs)
+[language-packs release](https://github.com/NicoriciN89/RimWorldModTranslator2/releases/tag/language-packs)
 in this repo, extract the zip, and copy the resulting `translate-en_XX-*`
 folder into `_internal\bundled_packages\` next to `RimWorldModTranslator.exe`
 (alongside the `translate-en_ru-1_9` folder already there). The next time you
