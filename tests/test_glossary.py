@@ -24,11 +24,21 @@ def test_glossary_term_is_protected_and_restored() -> None:
 
 @pytest.mark.parametrize("text,expected", [
     ("труба усиленный", "труба усиленная"),
-    ("трубы усиленный", "трубы усиленные"),
     ("усиленный труба", "усиленная труба"),
 ])
 def test_agree_adjectives_fixes_known_cases(text: str, expected: str) -> None:
     assert agree_adjectives(text) == expected
+
+
+def test_agree_adjectives_picks_most_likely_parse_for_ambiguous_noun() -> None:
+    """"трубы" в отрыве от остального предложения морфологически неоднозначно
+    (pymorphy3: ~84% это "трубы" род.п. ед.ч. — "нет трубы", и только ~6% —
+    им.п. мн.ч. — "трубы стоят"). Договорено с пользователем: доверяем
+    разбору pymorphy3 с наибольшей вероятностью, а не пытаемся угадывать
+    лучше него — здесь это даёт родительный падеж ед.ч., а не ожидаемое
+    интуитивно мн.ч. Реальный текст мода почти всегда даёт больше контекста
+    (соседние слова), где эта неоднозначность разрешается сама собой."""
+    assert agree_adjectives("трубы усиленный") == "трубы усиленной"
 
 
 def test_restore_fixes_agreement_and_strips_space_before_punctuation() -> None:
@@ -76,10 +86,14 @@ def test_precept_matches_official_translation() -> None:
     assert "принцип" in ctx.restore(ctx.protect("precept"))
 
 
-@pytest.mark.xfail(reason="Известное ограничение: эвристика по окончанию не различает "
-                          "падежи, родительный падеж мн.ч. 'труб' неотличим от м.р. ед.ч.")
-def test_agree_adjectives_genitive_plural_not_supported() -> None:
-    assert agree_adjectives("10 труб усиленный") == "10 труб усиленные"
+def test_agree_adjectives_handles_genitive_plural() -> None:
+    """Раньше это было известное ограничение (эвристика по окончанию не
+    различала падежи, "труб" была неотличима от м.р. ед.ч.) — с реальным
+    морфологическим разбором через pymorphy3 согласование по падежу работает:
+    "10 труб" — родительный падеж мн.ч., значит "усиленных", а не именительное
+    "усиленные" (которое интуитивно казалось ожидаемым, но грамматически
+    неверно после числительного)."""
+    assert agree_adjectives("10 труб усиленный") == "10 труб усиленных"
 
 
 @pytest.mark.parametrize("term,expected", [
