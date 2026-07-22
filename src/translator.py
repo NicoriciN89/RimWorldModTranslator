@@ -21,6 +21,12 @@ from pathlib import Path
 os.environ.setdefault("ARGOS_CHUNK_TYPE", "MINISBD")
 
 from .glossary import GlossaryContext
+
+# Языки, для которых есть глоссарий (см. src/glossary.py
+# _GLOSSARIES_BY_LANG) — для остальных protect()/restore() становится
+# no-op внутри GlossaryContext, но проверяем здесь тоже, чтобы не тратить
+# время на пустой цикл создания контекста для явно неподдерживаемого языка.
+_GLOSSARY_LANGUAGES = {"ru", "de", "fr"}
 from .rimworld_rules import TRANSLATION_PLACEHOLDER_RE as _PLACEHOLDER_RE
 from .safe_print import safe_print
 from .log_setup import get_logger
@@ -407,10 +413,10 @@ class TranslationEngine:
         порче в случайный третий язык, и откатом на перевод без глоссария
         при подозрении на обрезание из-за токена-заглушки (см. комментарий
         у _TRUNCATION_WORD_RATIO_THRESHOLD)."""
-        with_glossary = use_glossary and self.target_lang == "ru"
+        with_glossary = use_glossary and self.target_lang in _GLOSSARY_LANGUAGES
 
         def run_with_glossary() -> str:
-            ctx = GlossaryContext()
+            ctx = GlossaryContext(self.target_lang)
             return ctx.restore(self._translate_raw(ctx.protect(stripped)))
 
         if not with_glossary:

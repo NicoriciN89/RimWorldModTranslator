@@ -17,6 +17,19 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('pymorphy3_dicts_ru')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+# spaCy — для согласования прилагательных de/fr в glossary.py (нем./франц.
+# аналог pymorphy3, см. _get_spacy_model). Раньше spacy/thinc/blis были
+# исключены целиком (см. excludes ниже) ради размера — теперь это осознанный
+# компромисс (+~170 МБ), принятый пользователем ради грамматики de/fr.
+tmp_ret = collect_all('spacy')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('thinc')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('de_core_news_sm')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('fr_core_news_sm')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
 # Встроенный языковой пакет Argos (en->ru) — избавляет пользователя от
 # скачивания ~200 МБ при первом запуске (см. src/translator.py). Там же
 # лежит модель сегментации MiniSBD (bundled_packages/minisbd/en.onnx).
@@ -41,10 +54,13 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # см. комментарий у заглушки stanza выше
+        # см. комментарий у заглушки stanza выше. spacy/thinc/blis больше НЕ
+        # исключены (были раньше) — теперь нужны по-настоящему для
+        # согласования прилагательных de/fr (см. collect_all выше), torch
+        # остаётся исключён: его тянула бы только настоящая stanza (не
+        # используется), а spacy/thinc сюда за собой torch не тащат.
         'stanza', 'torch', 'torchgen', 'torchaudio', 'torchvision',
-        'spacy', 'spacy_legacy', 'spacy_loggers', 'thinc', 'blis',
-        'preshed', 'cymem', 'murmurhash', 'sympy', 'networkx',
+        'sympy', 'networkx',
     ],
     noarchive=False,
     optimize=0,

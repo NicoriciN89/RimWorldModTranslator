@@ -132,3 +132,63 @@ def test_generic_english_words_deliberately_excluded_from_anomaly_glossary() -> 
                           "может принять соседний глагол за существительное.")
 def test_agree_adjectives_confused_by_adjacent_verb() -> None:
     assert agree_adjectives("Сделать усиленный трубы") == "Сделать усиленные трубы"
+
+
+def test_glossary_context_works_for_german() -> None:
+    """Немецкий глоссарий (glossary_terms_de.py) — сгенерирован как лучшее
+    приближение, не сверен с носителем/официальным переводом (см.
+    предупреждение в начале того файла)."""
+    ctx = GlossaryContext("de")
+    protected = ctx.protect("a hediff affects the pawn")
+    assert "hediff" not in protected.lower()
+    restored = ctx.restore(protected)
+    assert "Effekt" in restored
+    assert "Figur" in restored
+
+
+def test_glossary_context_works_for_french() -> None:
+    ctx = GlossaryContext("fr")
+    protected = ctx.protect("a hediff affects the pawn")
+    assert "hediff" not in protected.lower()
+    restored = ctx.restore(protected)
+    assert "affection" in restored
+    assert "personnage" in restored
+
+
+def test_glossary_context_is_noop_for_unsupported_language() -> None:
+    """Язык без глоссария (пока) — protect()/restore() должны быть no-op,
+    а не падать с KeyError на несуществующем словаре."""
+    ctx = GlossaryContext("es")
+    text = "a hediff affects the pawn"
+    assert ctx.protect(text) == text
+    assert ctx.restore(text) == text
+
+
+@pytest.mark.parametrize("sentence,expected_form", [
+    ("Dieses verstärkt Kabel ist stark.", "verstärktes"),   # das Kabel, Neut/Sing
+    ("Diese verstärkt Kabel sind stark.", "verstärkte"),    # plural
+])
+def test_agree_adjectives_german_gender_number(sentence: str, expected_form: str) -> None:
+    """Немецкое согласование идёт через spaCy (de_core_news_sm), анализируя
+    ЦЕЛОЕ предложение — критично для инвариантных существительных вроде
+    "Kabel" (одинаково в ед./мн.ч.), которые вне контекста spaCy тегирует
+    неверно (см. _find_token в glossary.py)."""
+    assert expected_form in agree_adjectives(sentence, "de")
+
+
+def test_agree_adjectives_german_does_not_confuse_article_for_noun() -> None:
+    """Реальный баг, найденный вручную: "Die verstärkt Server" — без
+    исключения артиклей из роли "существительного" регекс ловил "Die
+    verstärkt" (артикль перед прилагательным) и согласовывал по роду
+    артикля (жен.), а не настоящего существительного "Server" (муж., der
+    Server) — результат "verstärkte" вместо правильного "verstärkter"."""
+    result = agree_adjectives("Die verstärkt Server ist hier.", "de")
+    assert "verstärkter" in result
+
+
+@pytest.mark.parametrize("sentence,expected_form", [
+    ("Ce câble renforcé est fort.", "renforcé"),        # masc sing, unchanged
+    ("Ces câbles renforcé sont forts.", "renforcés"),   # masc plur
+])
+def test_agree_adjectives_french_gender_number(sentence: str, expected_form: str) -> None:
+    assert expected_form in agree_adjectives(sentence, "fr")

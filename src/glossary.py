@@ -1,13 +1,22 @@
-"""Глоссарий устоявшихся игровых терминов RimWorld (EN -> RU), собранный из
-реальных переводов сообщества. Применяется как pre/post-обработка вокруг
-машинного перевода Argos Translate: перед переводом английский термин
-заменяется на защищённый плейсхолдер (аналогично {0}/{1}), чтобы модель не
-переводила его дословно, а после перевода плейсхолдер разворачивается в
-устоявшийся русский вариант. Так итоговый текст звучит "по-русскомодски",
-а не как буквальный машинный перевод отдельных игровых слов."""
+"""Глоссарий устоявшихся игровых терминов RimWorld, применяется как pre/post-
+обработка вокруг машинного перевода Argos Translate: перед переводом
+английский термин заменяется на защищённый плейсхолдер (аналогично {0}/{1}),
+чтобы модель не переводила его дословно, а после перевода плейсхолдер
+разворачивается в устоявшийся вариант на целевом языке. Так итоговый текст
+звучит "по-игровому", а не как буквальный машинный перевод отдельных слов.
+
+Русский глоссарий (GLOSSARY, ниже) собран из РЕАЛЬНЫХ переводов сообщества,
+найденных на диске пользователя (xenotype_summary, servers,
+trauma_team_missions, celetech_shuttle_extension, psycasts,
+cables_and_plumbing). Немецкий и французский (glossary_terms_de.py,
+glossary_terms_fr.py) — сгенерированы как лучшее приближение без такой
+проверки, см. предупреждение в начале тех файлов."""
 from __future__ import annotations
 
 import re
+
+from .glossary_terms_de import GLOSSARY_DE
+from .glossary_terms_fr import GLOSSARY_FR
 
 # EN-термин (нижний регистр) -> RU-термин. Порядок в самом словаре не важен —
 # сортировка по длине для regex делается автоматически ниже.
@@ -191,11 +200,20 @@ GLOSSARY: dict[str, str] = {
     "ritual mutilation": "ритуальное увечье",
 }
 
-# Прилагательные из глоссария, которые нужно согласовывать по роду/числу/
-# падежу с существительным, стоящим рядом (глоссарий хранит только словарную
-# форму м.р. ед.ч. им.п. — "усиленный"). Без этого получались реальные баги
-# вида "труба усиленный", "трубы усиленный" вместо "усиленная труба",
-# "усиленные трубы".
+# Глоссарии по целевому языку — используются GlossaryContext(lang) вместо
+# захардкоженного GLOSSARY, чтобы protect()/restore() работали для любого
+# из поддерживаемых языков, а не только для русского.
+_GLOSSARIES_BY_LANG: dict[str, dict[str, str]] = {
+    "ru": GLOSSARY,
+    "de": GLOSSARY_DE,
+    "fr": GLOSSARY_FR,
+}
+
+# Прилагательные из русского глоссария, которые нужно согласовывать по роду/
+# числу/падежу с существительным, стоящим рядом (глоссарий хранит только
+# словарную форму м.р. ед.ч. им.п. — "усиленный"). Без этого получались
+# реальные баги вида "труба усиленный", "трубы усиленный" вместо "усиленная
+# труба", "усиленные трубы".
 #
 # Реальный морфологический разбор через pymorphy3 (а не эвристика по
 # окончанию, как раньше) — умеет определять падеж, не только род/число:
@@ -206,24 +224,56 @@ GLOSSARY: dict[str, str] = {
 # целого предложения (может быть и "трубы" им.п. мн.ч., и "трубы" род.п.
 # ед.ч. — "нет трубы"); берём разбор с наибольшей вероятностью по pymorphy3
 # и не пытаемся угадывать лучше него.
-_ADJECTIVES_NEEDING_AGREEMENT = {"усиленный"}
+_RU_ADJECTIVES_NEEDING_AGREEMENT = {"усиленный"}
+
+# То же для de/fr — словарная форма прилагательного, как она хранится в
+# GLOSSARY_DE/GLOSSARY_FR (нем. м.р. ед.ч. им.п.: "verstärkt"; фр. м.р. ед.ч.:
+# "renforcé").
+_DE_ADJECTIVES_NEEDING_AGREEMENT = {"verstärkt"}
+_FR_ADJECTIVES_NEEDING_AGREEMENT = {"renforcé"}
 
 try:
     import pymorphy3
-    _morph: "pymorphy3.MorphAnalyzer | None" = pymorphy3.MorphAnalyzer(lang="ru")
+    _morph_ru: "pymorphy3.MorphAnalyzer | None" = pymorphy3.MorphAnalyzer(lang="ru")
 except ImportError:
-    _morph = None
+    _morph_ru = None
+
+# spaCy для de/fr — ленивая загрузка (тяжёлая инициализация модели, ~1-2с),
+# только если реально понадобится согласование для этих языков. Small-модели
+# (_sm) не идеальны по точности тегирования (могут спутать часть речи на
+# короткой/двусмысленной фразе), но дают нужные Gender/Number/Case из
+# token.morph в подавляющем большинстве обычных игровых фраз.
+_spacy_nlp_cache: dict[str, object] = {}
 
 
-def _agree_adjective_with_noun(adjective: str, noun: str) -> str:
-    """Ставит adjective в форму, согласованную с noun, через реальный
-    морфологический анализ. Если pymorphy3 недоступен или разбор не удался —
-    возвращает adjective как есть (без согласования лучше, чем упавшая
-    программа)."""
-    if _morph is None:
+def _get_spacy_model(lang: str):
+    if lang in _spacy_nlp_cache:
+        return _spacy_nlp_cache[lang]
+    model_name = {"de": "de_core_news_sm", "fr": "fr_core_news_sm"}.get(lang)
+    if model_name is None:
+        return None
+    try:
+        import spacy
+        nlp = spacy.load(model_name)
+    except (ImportError, OSError):
+        nlp = None
+    _spacy_nlp_cache[lang] = nlp
+    return nlp
+
+
+def _agree_adjective_with_noun_ru(adjective: str, noun: str, sentence: str) -> str:
+    """Ставит русское adjective в форму, согласованную с noun, через
+    реальный морфологический анализ pymorphy3. Если pymorphy3 недоступен
+    или разбор не удался — возвращает adjective как есть (без согласования
+    лучше, чем упавшая программа). sentence не используется (pymorphy3 —
+    словарный анализ отдельного слова, не neural tagger, поэтому контекст
+    предложения ему не нужен, в отличие от spaCy для de/fr ниже) — принят
+    только чтобы все три функции имели общую сигнатуру для единого call
+    site в agree_adjectives()."""
+    if _morph_ru is None:
         return adjective
-    noun_parse = _morph.parse(noun)[0]
-    adj_parse = _morph.parse(adjective)[0]
+    noun_parse = _morph_ru.parse(noun)[0]
+    adj_parse = _morph_ru.parse(adjective)[0]
     number = noun_parse.tag.number
     case = noun_parse.tag.case
     gender = noun_parse.tag.gender
@@ -237,28 +287,166 @@ def _agree_adjective_with_noun(adjective: str, noun: str) -> str:
     return inflected.word if inflected else adjective
 
 
-_NOUN_RE = r"[А-ЯЁа-яё]+"
-_AGREEMENT_RE = re.compile(
-    rf"\b({'|'.join(re.escape(a) for a in _ADJECTIVES_NEEDING_AGREEMENT)})\b\s+({_NOUN_RE})"
-    rf"|({_NOUN_RE})\s+\b({'|'.join(re.escape(a) for a in _ADJECTIVES_NEEDING_AGREEMENT)})\b"
-)
+# Немецкие формы согласования по роду/числу для прилагательных из
+# _DE_ADJECTIVES_NEEDING_AGREEMENT — предикативное/атрибутивное окончание
+# сильного склонения (без артикля), которое реально встречается в игровых
+# строках вида "verstärktes Kabel". spaCy используется только чтобы
+# ОПРЕДЕЛИТЬ Gender/Number существительного — саму словоформу прилагательного
+# ищем в этой небольшой таблице (нет надобности в общем морфологическом
+# генераторе для одного известного прилагательного).
+_DE_ADJECTIVE_FORMS: dict[str, dict[str, str]] = {
+    "verstärkt": {
+        "Masc,Sing": "verstärkter", "Fem,Sing": "verstärkte",
+        "Neut,Sing": "verstärktes", "Plur": "verstärkte",
+    },
+}
+
+_FR_ADJECTIVE_FORMS: dict[str, dict[str, str]] = {
+    "renforcé": {
+        "Masc,Sing": "renforcé", "Fem,Sing": "renforcée",
+        "Masc,Plur": "renforcés", "Fem,Plur": "renforcées",
+    },
+}
 
 
-def agree_adjectives(text: str) -> str:
-    """Подгоняет род/число/падеж защищённых прилагательных (см.
-    _ADJECTIVES_NEEDING_AGREEMENT) под соседнее существительное — "труба
-    усиленный" -> "усиленная труба" остаётся в исходном порядке слов,
-    меняется только форма прилагательного."""
+def _find_token(doc, word: str):
+    """Ищет в разборе spaCy токен, совпадающий с word без учёта регистра —
+    используется, чтобы получить Gender/Number существительного из разбора
+    ЦЕЛОГО предложения, а не изолированного слова. Критично для точности:
+    вне контекста spaCy_sm часто ошибается на инвариантных/двусмысленных
+    словах (напр. нем. "Kabel" одинаково и в ед., и во мн.ч. — изолированно
+    тегируется как Plur, а в "Das Kabel ist stark." корректно как Sing)."""
+    lower = word.lower()
+    for token in doc:
+        if token.text.lower() == lower:
+            return token
+    return None
+
+
+def _agree_adjective_with_noun_de(adjective: str, noun: str, sentence: str) -> str:
+    """Определяет Gender/Number существительного через spaCy (de_core_news_sm),
+    анализируя ЦЕЛОЕ предложение sentence (а не noun в отрыве от контекста —
+    так спуско точнее для двусмысленных/инвариантных слов), и подставляет
+    соответствующую форму прилагательного из _DE_ADJECTIVE_FORMS. Если spaCy
+    недоступна, существительное не нашлось в разборе, или для него нет тега
+    рода/числа — возвращает adjective как есть."""
+    nlp = _get_spacy_model("de")
+    if nlp is None:
+        return adjective
+    token = _find_token(nlp(sentence), noun)
+    if token is None:
+        return adjective
+    number = token.morph.get("Number")
+    gender = token.morph.get("Gender")
+    if number and number[0] == "Plur":
+        key = "Plur"
+    elif gender and number:
+        key = f"{gender[0]},{number[0]}"
+    else:
+        return adjective
+    forms = _DE_ADJECTIVE_FORMS.get(adjective.lower())
+    if forms is None:
+        return adjective
+    return forms.get(key, adjective)
+
+
+def _agree_adjective_with_noun_fr(adjective: str, noun: str, sentence: str) -> str:
+    """Аналог _agree_adjective_with_noun_de для французского
+    (fr_core_news_sm) — французский не различает падежи, только род/число."""
+    nlp = _get_spacy_model("fr")
+    if nlp is None:
+        return adjective
+    token = _find_token(nlp(sentence), noun)
+    if token is None:
+        return adjective
+    number = token.morph.get("Number")
+    gender = token.morph.get("Gender")
+    if not number or not gender:
+        return adjective
+    key = f"{gender[0]},{number[0]}"
+    forms = _FR_ADJECTIVE_FORMS.get(adjective.lower())
+    if forms is None:
+        return adjective
+    return forms.get(key, adjective)
+
+
+_AGREEMENT_HANDLERS = {
+    "ru": (_RU_ADJECTIVES_NEEDING_AGREEMENT, _agree_adjective_with_noun_ru),
+    "de": (_DE_ADJECTIVES_NEEDING_AGREEMENT, _agree_adjective_with_noun_de),
+    "fr": (_FR_ADJECTIVES_NEEDING_AGREEMENT, _agree_adjective_with_noun_fr),
+}
+
+_LATIN_NOUN_RE = r"[A-Za-zÀ-ÖØ-öø-ÿß]+"
+_CYRILLIC_NOUN_RE = r"[А-ЯЁа-яё]+"
+
+# Артикли/детерминативы de/fr, которые нельзя спутать с существительным —
+# без этого списка регекс "слово + прилагательное" мог поймать "Die
+# verstärkt" (артикль перед прилагательным) раньше, чем "verstärkt Server"
+# (настоящее прилагательное+существительное) дальше в той же строке, и
+# согласовать прилагательное по роду АРТИКЛЯ вместо настоящего
+# существительного (найдено на: "Die verstärkt Server" -> опробовано
+# согласование дало "verstärkte", хотя der Server мужского рода).
+_DE_NON_NOUNS = {
+    "der", "die", "das", "den", "dem", "des",
+    "ein", "eine", "einer", "einem", "einen", "eines",
+    "kein", "keine", "keiner", "keinem", "keinen", "keines",
+}
+_FR_NON_NOUNS = {
+    "le", "la", "les", "un", "une", "des", "du", "au", "aux",
+    "ce", "cet", "cette", "ces",
+}
+_NON_NOUNS_BY_LANG = {"de": _DE_NON_NOUNS, "fr": _FR_NON_NOUNS}
+
+
+def _build_agreement_pattern(adjectives: set[str], lang: str) -> re.Pattern:
+    noun_re = _CYRILLIC_NOUN_RE if lang == "ru" else _LATIN_NOUN_RE
+    alternation = "|".join(re.escape(a) for a in adjectives)
+    non_nouns = _NON_NOUNS_BY_LANG.get(lang)
+    # Негативный lookahead/lookbehind исключает известные артикли из роли
+    # "существительного" в обеих ветках альтернации — без словаря частей
+    # речи это не отличит АБСОЛЮТНО любое не-существительное (см.
+    # ограничение "Сделать усиленный трубы" для русского), но закрывает
+    # самый частый и предсказуемый случай — артикль/детерминатив.
+    if non_nouns:
+        # (?<!\w) — соседний символ слева не буква/цифра/_: без этого
+        # исключение "die" срабатывало только на позиции 0 строки, и движок
+        # regex просто сдвигался на 1 символ вправо ("ie verstärkt..."),
+        # где "ie" уже не в списке артиклей, и матчил его как "существительное".
+        exclude = rf"(?<!\w)(?!(?:{'|'.join(non_nouns)})\b)"
+        return re.compile(
+            rf"\b({alternation})\b\s+{exclude}({noun_re})"
+            rf"|{exclude}({noun_re})\s+\b({alternation})\b",
+            re.IGNORECASE,
+        )
+    return re.compile(
+        rf"\b({alternation})\b\s+({noun_re})"
+        rf"|({noun_re})\s+\b({alternation})\b",
+        re.IGNORECASE,
+    )
+
+
+def agree_adjectives(text: str, lang: str = "ru") -> str:
+    """Подгоняет род/число/падеж защищённых прилагательных под соседнее
+    существительное — "труба усиленный" -> "усиленная труба" остаётся в
+    исходном порядке слов, меняется только форма прилагательного. lang
+    выбирает, какой язык/анализатор использовать (ru: pymorphy3, de/fr:
+    spaCy); язык без обработчика возвращает text без изменений."""
+    handler = _AGREEMENT_HANDLERS.get(lang)
+    if handler is None:
+        return text
+    adjectives, agree_fn = handler
+    pattern = _build_agreement_pattern(adjectives, lang)
+
     def repl(m: re.Match) -> str:
         adj_before, noun_after, noun_before, adj_after = m.groups()
         adj = adj_before or adj_after
         noun = noun_after or noun_before
-        agreed = _agree_adjective_with_noun(adj.lower(), noun.lower())
+        agreed = agree_fn(adj.lower(), noun.lower() if lang == "ru" else noun, text)
         if adj_before:
             return f"{agreed} {noun}"
         return f"{noun} {agreed}"
 
-    return _AGREEMENT_RE.sub(repl, text)
+    return pattern.sub(repl, text)
 
 # Плейсхолдер-токен, который (эмпирически проверено) Argos Translate переносит
 # через перевод буквально в подавляющем большинстве случаев, без транслитерации
@@ -266,26 +454,36 @@ def agree_adjectives(text: str) -> str:
 _TOKEN_PREFIX = "Zqg"
 
 
-def _build_pattern() -> re.Pattern:
-    terms = sorted(GLOSSARY, key=len, reverse=True)
+def _build_term_pattern(glossary: dict[str, str]) -> re.Pattern:
+    terms = sorted(glossary, key=len, reverse=True)
     alternation = "|".join(re.escape(t) for t in terms)
     return re.compile(rf"\b({alternation})\b", re.IGNORECASE)
 
 
-_TERM_RE = _build_pattern()
+_TERM_PATTERNS_BY_LANG: dict[str, re.Pattern] = {
+    lang: _build_term_pattern(glossary) for lang, glossary in _GLOSSARIES_BY_LANG.items()
+}
 
 
 class GlossaryContext:
-    """Держит соответствие "токен -> русский термин" для одного вызова
-    protect()/restore(), чтобы разные строки не путали друг друга индексами."""
+    """Держит соответствие "токен -> термин на целевом языке" для одного
+    вызова protect()/restore(), чтобы разные строки не путали друг друга
+    индексами. lang выбирает глоссарий (см. _GLOSSARIES_BY_LANG) — язык без
+    глоссария (ещё) делает protect()/restore() no-op."""
 
-    def __init__(self) -> None:
+    def __init__(self, lang: str = "ru") -> None:
+        self.lang = lang
+        self._glossary = _GLOSSARIES_BY_LANG.get(lang)
+        self._term_re = _TERM_PATTERNS_BY_LANG.get(lang)
         self._tokens: list[str] = []
 
     def protect(self, text: str) -> str:
+        if self._glossary is None or self._term_re is None:
+            return text
+
         def repl(m: re.Match) -> str:
             matched = m.group(0)
-            replacement = GLOSSARY[matched.lower()]
+            replacement = self._glossary[matched.lower()]
             # Сохраняем заглавную букву оригинала: "Dryad supremacy" в начале
             # предложения/заголовка должно давать «Дриада...», а не «дриада»
             # посреди фразы с большой буквы. Обратное (опустить регистр) не
@@ -295,10 +493,16 @@ class GlossaryContext:
             self._tokens.append(replacement)
             return f" {_TOKEN_PREFIX}{len(self._tokens) - 1} "
 
-        return _TERM_RE.sub(repl, text)
+        return self._term_re.sub(repl, text)
 
     def restore(self, text: str) -> str:
-        pattern = re.compile(rf"\s*{_TOKEN_PREFIX}([0-9]+)\s*")
+        if self._glossary is None:
+            return text
+        # \s*-?\s* с обеих сторон: немецкий Argos иногда трактует токен-
+        # заглушку как первую часть немецкого составного слова и вставляет
+        # дефис ("Zqg0-Kabel", как в настоящих составных типа "Autokabel") —
+        # без этого после подстановки термина оставался висячий "-Kabel".
+        pattern = re.compile(rf"\s*-?\s*{_TOKEN_PREFIX}([0-9]+)\s*-?\s*")
 
         def repl(m: re.Match) -> str:
             idx = int(m.group(1))
@@ -309,4 +513,4 @@ class GlossaryContext:
         restored = pattern.sub(repl, text)
         restored = re.sub(r" {2,}", " ", restored).strip()
         restored = re.sub(r"\s+([.,!?;:])", r"\1", restored)
-        return agree_adjectives(restored)
+        return agree_adjectives(restored, self.lang)

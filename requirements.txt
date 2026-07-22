@@ -1,3 +1,9 @@
 argostranslate>=1.9
 pymorphy3>=2.0
 pymorphy3-dicts-ru>=2.4
+spacy>=3.8
+
+# spaCy language models (de/fr adjective agreement) install separately, not
+# via pip -r — after installing the above, run:
+#   python -m spacy download de_core_news_sm
+#   python -m spacy download fr_core_news_sm
